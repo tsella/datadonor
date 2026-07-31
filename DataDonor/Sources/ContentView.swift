@@ -113,7 +113,7 @@ struct ContentView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     NavigationLink(destination: SettingsView()) {
-                        Image(systemName: "slider.horizontal.3")
+                        Image(systemName: "gearshape.fill")
                             .font(.title3)
                             .foregroundColor(Color.primary.opacity(0.6))
                             .padding(8)
