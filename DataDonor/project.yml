@@ -1,0 +1,13 @@
+name: DataDonor
+options:
+  bundleIdPrefix: la.tsel
+targets:
+  DataDonor:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources: [Sources]
+    info:
+      path: Info.plist
+    entitlements:
+      path: DataDonor.entitlements
