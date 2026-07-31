@@ -6,9 +6,17 @@
 
 DataDonor is an iOS application designed to run in the background, collect all available Apple Health data via HealthKit, and securely transmit it to a local Linux server. The app features mDNS server discovery, strict Wi-Fi SSID network monitoring, and automatic background syncs to ensure your health data remains securely stored on your own local infrastructure.
 
+## Supported Health Data
+DataDonor comprehensively extracts both time-series quantity samples and category events. Currently supported metrics include:
+- **Cardiovascular & Vitals**: Heart Rate, Resting Heart Rate, Walking Heart Rate Average, Heart Rate Variability (HRV), VO2 Max, Oxygen Saturation (SpO2), Blood Pressure (Systolic/Diastolic), Body Mass, Height, BMI, Body Fat Percentage, Lean Body Mass.
+- **Activity & Mobility**: Step Count, Distance (Walking/Running, Cycling, Swimming), Swimming Stroke Count, Flights Climbed, Active/Basal Energy Burned, Exercise Time, Stand Time, Walking Asymmetry, Step Length, Double Support Time, Walking Speed.
+- **Sleep & Environment**: Sleep Stages (Analysis), Respiratory Rate, Wrist Temperature, Environmental Audio Exposure, Time in Daylight.
+- **Events & Characteristics**: Mindful Sessions, Menstrual Flow, Irregular Rhythm Notifications, High/Low Heart Rate Events.
+
+*(Note: Static characteristic data like Date of Birth and Biological Sex require separate extraction pathways and can be added on request.)*
+
 ## Features
-- **HealthKit Integration**: Requests authorization and collects time-series data across all available HealthKit identifiers.
-- **mDNS Server Discovery**: Automatically finds your local backend server via Bonjour (`_datadonor._tcp`) without manual IP configuration.
+- **HealthKit Integration**: Broad-net extraction engine that securely reads and correctly standardizes units for over 35 distinct HealthKit metrics.
 - **Background URLSession**: Ensures that massive historical data payloads successfully upload even if the app is placed in the background.
 - **Network Path Monitoring**: Restricts data syncing to a specific Wi-Fi SSID to ensure data only transfers when connected to your secure local network.
 - **Self-Signed Certificate Trust**: Allows the use of locally signed certificates for your Linux server backend.
