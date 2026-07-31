@@ -24,6 +24,11 @@ DataDonor comprehensively extracts both time-series quantity samples and categor
 ## Server Specification
 This app requires a backend server to receive the data. See the `server_specification.md` document for the full JSON payload specifications, checkpoint syncing mechanics, and endpoint requirements.
 
+## Data Privacy & Security Responsibility
+⚠️ **IMPORTANT**: DataDonor is designed to give you complete ownership and control over your personal health data by extracting it from Apple's ecosystem and transmitting it to your own self-hosted server. 
+
+Because this data contains highly sensitive personal, medical, and biometric information, **it is entirely your responsibility to secure your backend infrastructure.** Ensure that your server is properly firewalled, uses encryption at rest, and that your API keys and self-signed certificates are kept strictly confidential. The developers of DataDonor are not responsible for any data leaks, breaches, or mishandling of information once it leaves the iOS sandbox and is transmitted to your local server.
+
 ## Author
 Tom Sella (<tsella@gmail.com>)
 
