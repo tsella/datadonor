@@ -6,10 +6,11 @@ struct SyncDataPoint: Identifiable, Equatable {
     let date: Date
     let type: String
     let count: Int
+    let density: Double
 }
 
 enum TimeScale {
-    case days, weeks, months
+    case days, months, years
 }
 
 struct DashboardView: View {
@@ -88,9 +89,17 @@ struct DashboardView: View {
             // Animated Chart
             Chart {
                 ForEach(syncData) { item in
+                    let unit: Calendar.Component = {
+                        switch timeScale {
+                        case .days: return .day
+                        case .months: return .month
+                        case .years: return .year
+                        }
+                    }()
                     BarMark(
-                        x: .value("Date", item.date, unit: timeScale == .days ? .day : (timeScale == .weeks ? .weekOfYear : .month)),
-                        y: .value("Records", item.count)
+                        x: .value("Date", item.date, unit: unit),
+                        y: .value("Records", item.count),
+                        width: .ratio(CGFloat(item.density))
                     )
                     .foregroundStyle(chartColors[item.type] ?? .gray)
                     .cornerRadius(4)
@@ -101,23 +110,32 @@ struct DashboardView: View {
                     AxisMarks(values: .stride(by: .day)) { _ in
                         AxisGridLine(stroke: StrokeStyle(lineWidth: 1, dash: [4]))
                             .foregroundStyle(Color.gray.opacity(0.15))
-                        AxisValueLabel(format: .dateTime.weekday(.abbreviated))
+                        AxisValueLabel(format: .dateTime.weekday(.abbreviated), centered: true)
                             .foregroundStyle(Color.primary.opacity(0.6))
                             .font(.caption)
                     }
-                } else if timeScale == .weeks {
-                    AxisMarks(values: .stride(by: .weekOfYear)) { _ in
+                } else if timeScale == .months {
+                    // Omit explicit stride so Swift Charts automatically spaces the 24 months nicely
+                    AxisMarks { value in
                         AxisGridLine(stroke: StrokeStyle(lineWidth: 1, dash: [4]))
                             .foregroundStyle(Color.gray.opacity(0.15))
-                        AxisValueLabel(format: .dateTime.week())
-                            .foregroundStyle(Color.primary.opacity(0.6))
-                            .font(.caption)
+                        AxisValueLabel(centered: true) {
+                            if let date = value.as(Date.self) {
+                                VStack(spacing: 2) {
+                                    Text(date, format: .dateTime.month(.abbreviated))
+                                        .font(.caption)
+                                    Text(date, format: .dateTime.year())
+                                        .font(.caption2)
+                                }
+                                .foregroundStyle(Color.primary.opacity(0.6))
+                            }
+                        }
                     }
                 } else {
-                    AxisMarks(values: .stride(by: .month)) { _ in
+                    AxisMarks(values: .stride(by: .year)) { _ in
                         AxisGridLine(stroke: StrokeStyle(lineWidth: 1, dash: [4]))
                             .foregroundStyle(Color.gray.opacity(0.15))
-                        AxisValueLabel(format: .dateTime.month(.abbreviated))
+                        AxisValueLabel(format: .dateTime.year(), centered: true)
                             .foregroundStyle(Color.primary.opacity(0.6))
                             .font(.caption)
                     }
@@ -161,38 +179,44 @@ struct DashboardView: View {
             var daysData: [SyncDataPoint] = []
             for dayOffset in (0..<7).reversed() {
                 guard let date = calendar.date(byAdding: .day, value: -dayOffset, to: today) else { continue }
+                let hoursSynced = Double(Int.random(in: 1...24))
+                let density = hoursSynced / 24.0
                 for type in types {
                     let maxCount = (type == "Sleep" || type == "Workouts") ? 5 : 800
-                    daysData.append(SyncDataPoint(date: date, type: type, count: Int.random(in: 1...maxCount)))
+                    daysData.append(SyncDataPoint(date: date, type: type, count: Int.random(in: 1...maxCount), density: density))
                 }
             }
             syncData = daysData
             
-            // Stage 2: Sync Weeks
+            // Stage 2: Sync Months (24 months to show year boundaries)
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                timeScale = .weeks
-                var weeksData: [SyncDataPoint] = []
-                for weekOffset in (0..<4).reversed() {
-                    guard let date = calendar.date(byAdding: .weekOfYear, value: -weekOffset, to: today) else { continue }
+                timeScale = .months
+                var monthsData: [SyncDataPoint] = []
+                for monthOffset in (0..<24).reversed() {
+                    guard let date = calendar.date(byAdding: .month, value: -monthOffset, to: today) else { continue }
+                    let daysSynced = Double(Int.random(in: 1...30))
+                    let density = daysSynced / 30.0
                     for type in types {
-                        let maxCount = (type == "Sleep" || type == "Workouts") ? 35 : 5600
-                        weeksData.append(SyncDataPoint(date: date, type: type, count: Int.random(in: 20...maxCount)))
+                        let maxCount = (type == "Sleep" || type == "Workouts") ? 150 : 24000
+                        monthsData.append(SyncDataPoint(date: date, type: type, count: Int.random(in: 100...maxCount), density: density))
                     }
                 }
-                syncData = weeksData
+                syncData = monthsData
                 
-                // Stage 3: Sync Months
+                // Stage 3: Sync Years (5 years)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    timeScale = .months
-                    var monthsData: [SyncDataPoint] = []
-                    for monthOffset in (0..<6).reversed() {
-                        guard let date = calendar.date(byAdding: .month, value: -monthOffset, to: today) else { continue }
+                    timeScale = .years
+                    var yearsData: [SyncDataPoint] = []
+                    for yearOffset in (0..<5).reversed() {
+                        guard let date = calendar.date(byAdding: .year, value: -yearOffset, to: today) else { continue }
+                        let monthsSynced = Double(Int.random(in: 1...12))
+                        let density = monthsSynced / 12.0
                         for type in types {
-                            let maxCount = (type == "Sleep" || type == "Workouts") ? 150 : 24000
-                            monthsData.append(SyncDataPoint(date: date, type: type, count: Int.random(in: 100...maxCount)))
+                            let maxCount = (type == "Sleep" || type == "Workouts") ? 1800 : 288000
+                            yearsData.append(SyncDataPoint(date: date, type: type, count: Int.random(in: 1000...maxCount), density: density))
                         }
                     }
-                    syncData = monthsData
+                    syncData = yearsData
                     
                     // Finish
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
