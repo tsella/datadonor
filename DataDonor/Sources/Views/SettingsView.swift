@@ -5,10 +5,18 @@ struct SettingsView: View {
     @AppStorage("targetSSID") private var targetSSID = ""
     @AppStorage("customServerURL") private var customServerURL = ""
     
+    @AppStorage("isApiKeyVerified") private var isApiKeyVerified = false
+    
     var body: some View {
         Form {
             Section(header: Text("Authentication"), footer: Text("The API key shared with your local server.")) {
-                SecureField("API Key", text: $apiKey)
+                if isApiKeyVerified {
+                    SecureField("API Key", text: $apiKey)
+                } else {
+                    TextField("API Key", text: $apiKey)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
+                }
             }
             
             Section(header: Text("Network Sync"), footer: Text("The app will only sync when connected to this Wi-Fi network.")) {
@@ -20,6 +28,10 @@ struct SettingsView: View {
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled(true)
+            }
+            
+            Section(header: Text("Debugging")) {
+                NavigationLink("View Logs", destination: LogViewer())
             }
         }
         .navigationTitle("Settings")

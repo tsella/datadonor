@@ -19,10 +19,7 @@
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>UILaunchScreen</key>
-    <dict>
-        <key>UIColorName</key>
-        <string>white</string>
-    </dict>
+    <dict/>
     <key>NSHealthShareUsageDescription</key>
     <string>We need to sync your data to your personal server.</string>
     <key>NSHealthUpdateUsageDescription</key>
