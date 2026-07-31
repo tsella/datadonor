@@ -13,33 +13,71 @@ class HealthStoreManager: ObservableObject {
         }
         
         let quantityTypes: [HKQuantityTypeIdentifier] = [
+            // Cardio & Heart
+            .heartRate,
+            .heartRateVariabilitySDNN,
+            .restingHeartRate,
+            .walkingHeartRateAverage,
+            .vo2Max,
+            .oxygenSaturation,
+            
+            // Activity & Mobility
             .stepCount,
             .distanceWalkingRunning,
-            .heartRate,
+            .distanceCycling,
+            .distanceSwimming,
+            .swimmingStrokeCount,
+            .flightsClimbed,
             .activeEnergyBurned,
             .basalEnergyBurned,
-            .flightsClimbed,
-            .oxygenSaturation,
+            .appleExerciseTime,
+            .appleStandTime,
+            .walkingAsymmetryPercentage,
+            .walkingStepLength,
+            .walkingDoubleSupportPercentage,
+            .walkingSpeed,
+            
+            // Environmental & Sleep
+            .environmentalAudioExposure,
+            .respiratoryRate,
+            
+            // Vitals (General)
+            .height,
             .bloodPressureDiastolic,
             .bloodPressureSystolic,
             .bodyMass,
             .bodyMassIndex,
             .bodyFatPercentage,
             .leanBodyMass,
+            
+            // Nutrition (Optional scaffolded)
             .dietaryEnergyConsumed,
             .dietaryWater
         ]
+        
+        // Use #available(iOS 16.0, *) to safely add new types, although our deployment target is 16.0
+        var quantityIdentifiers = quantityTypes
+        if #available(iOS 16.0, *) {
+            quantityIdentifiers.append(.appleSleepingWristTemperature)
+        }
+        if #available(iOS 17.0, *) {
+            quantityIdentifiers.append(.timeInDaylight)
+        }
         
         let categoryTypes: [HKCategoryTypeIdentifier] = [
             .sleepAnalysis,
             .appleStandHour,
             .mindfulSession,
-            .menstrualFlow
+            .menstrualFlow,
+            .irregularHeartRhythmEvent,
+            .highHeartRateEvent,
+            .lowHeartRateEvent,
+            .environmentalAudioExposureEvent
         ]
         
         var readTypes = Set<HKObjectType>()
         
-        for identifier in quantityTypes {
+        for identifier in quantityIdentifiers {
             if let type = HKObjectType.quantityType(forIdentifier: identifier) {
                 readTypes.insert(type)
             }
