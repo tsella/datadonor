@@ -1,10 +1,6 @@
-<div align="center">
-  <img src="[local asset]
-</div>
-
 # DataDonor
 
-DataDonor is an iOS application designed to run in the background, collect all available Apple Health data via HealthKit, and securely transmit it to a local Linux server. The app features mDNS server discovery, strict Wi-Fi SSID network monitoring, and automatic background syncs to ensure your health data remains securely stored on your own local infrastructure.
+DataDonor is an iOS application designed to run in the background, collect all available Apple Health data via HealthKit, and securely transmit it to a local server. The app features mDNS server discovery, strict Wi-Fi SSID network monitoring, and automatic background syncs to ensure your health data remains securely stored on your own local infrastructure.
 
 ## Supported Health Data
 DataDonor comprehensively extracts both time-series quantity samples and category events. Currently supported metrics include:
@@ -19,7 +15,7 @@ DataDonor comprehensively extracts both time-series quantity samples and categor
 - **HealthKit Integration**: Broad-net extraction engine that securely reads and correctly standardizes units for over 35 distinct HealthKit metrics.
 - **Background URLSession**: Ensures that massive historical data payloads successfully upload even if the app is placed in the background.
 - **Network Path Monitoring**: Restricts data syncing to a specific Wi-Fi SSID to ensure data only transfers when connected to your secure local network.
-- **Self-Signed Certificate Trust**: Allows the use of locally signed certificates for your Linux server backend.
+- **Self-Signed Certificate Trust**: Allows the use of locally signed certificates for your server backend.
 
 ## Server Specification
 This app requires a backend server to receive the data. See the `server_specification.md` document for the full JSON payload specifications, checkpoint syncing mechanics, and endpoint requirements.
