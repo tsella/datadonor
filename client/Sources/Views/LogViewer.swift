@@ -15,6 +15,7 @@ struct LogViewer: View {
     @State private var showDebug = true
     @State private var showInfo = true
     @State private var showWarn = true
+    @State private var showError = true
     
     var body: some View {
         VStack(spacing: 0) {
@@ -29,6 +30,9 @@ struct LogViewer: View {
                 Toggle("WARN", isOn: $showWarn)
                     .toggleStyle(.button)
                     .tint(.orange)
+                Toggle("ERROR", isOn: $showError)
+                    .toggleStyle(.button)
+                    .tint(.red)
             }
             .padding()
             .background(Color(UIColor.systemBackground))
@@ -92,7 +96,8 @@ struct LogViewer: View {
         entries.filter { entry in
             let matchesLevel = (entry.level == .debug && showDebug) ||
                                (entry.level == .info && showInfo) ||
-                               (entry.level == .warn && showWarn)
+                               (entry.level == .warn && showWarn) ||
+                               (entry.level == .error && showError)
             
             let matchesSearch = searchText.isEmpty || entry.message.localizedCaseInsensitiveContains(searchText)
             
@@ -127,6 +132,7 @@ struct LogViewer: View {
         case .debug: return .gray
         case .info: return .blue
         case .warn: return .orange
+        case .error: return .red
         }
     }
 }
