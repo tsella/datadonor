@@ -4,9 +4,10 @@ enum LogLevel: String, Comparable {
     case debug = "DEBUG"
     case info = "INFO"
     case warn = "WARN"
+    case error = "ERROR"
     
     static func < (lhs: LogLevel, rhs: LogLevel) -> Bool {
-        let order: [LogLevel: Int] = [.debug: 0, .info: 1, .warn: 2]
+        let order: [LogLevel: Int] = [.debug: 0, .info: 1, .warn: 2, .error: 3]
         return order[lhs]! < order[rhs]!
     }
 }
