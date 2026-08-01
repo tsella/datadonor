@@ -10,10 +10,6 @@ struct SyncDataPoint: Identifiable, Equatable {
     var density: Double = 0.8
 }
 
-enum TimeScale: String {
-    case days, weeks, months
-}
-
 struct ServerStat: Codable {
     let date: String
     let type: String
@@ -32,9 +28,8 @@ struct DashboardView: View {
     @AppStorage("apiKey") private var apiKey = ""
     @AppStorage("customServerURL") private var customServerURL = ""
     
-    @State private var timeScale: TimeScale = .days
     @State private var syncData: [SyncDataPoint] = []
-    @State private var animationTask: Task<Void, Never>?
+    @State private var fetchTask: Task<Void, Never>?
     
     // Custom curated pastel palette
     let chartColors: [String: Color] = [
@@ -94,13 +89,6 @@ struct DashboardView: View {
             
             // Interactive Legend & Controls
             VStack(alignment: .leading, spacing: 14) {
-                Picker("", selection: $timeScale) {
-                    Text("Days").tag(TimeScale.days)
-                    Text("Weeks").tag(TimeScale.weeks)
-                    Text("Months").tag(TimeScale.months)
-                }
-                .pickerStyle(.segmented)
-                
                 HStack(spacing: 12) {
                     ForEach(["Heart Rate", "Steps", "Sleep", "Workouts"], id: \.self) { type in
                         HStack(spacing: 4) {
@@ -121,7 +109,7 @@ struct DashboardView: View {
             Chart {
                 ForEach(syncData) { item in
                     BarMark(
-                        x: .value("Date", item.date, unit: timeScale == .days ? .day : (timeScale == .weeks ? .weekOfYear : .month)),
+                        x: .value("Date", item.date, unit: .month),
                         y: .value("Records", item.count),
                         width: .ratio(CGFloat(item.density))
                     )
@@ -133,19 +121,9 @@ struct DashboardView: View {
                 AxisMarks { _ in
                     AxisGridLine(stroke: StrokeStyle(lineWidth: 1, dash: [4]))
                         .foregroundStyle(Color.gray.opacity(0.15))
-                    if timeScale == .days {
-                        AxisValueLabel(format: .dateTime.month().day())
-                            .foregroundStyle(Color.primary.opacity(0.6))
-                            .font(.caption)
-                    } else if timeScale == .weeks {
-                        AxisValueLabel(format: .dateTime.month().day())
-                            .foregroundStyle(Color.primary.opacity(0.6))
-                            .font(.caption)
-                    } else {
-                        AxisValueLabel(format: .dateTime.year().month(.abbreviated))
-                            .foregroundStyle(Color.primary.opacity(0.6))
-                            .font(.caption)
-                    }
+                    AxisValueLabel(format: .dateTime.year().month(.abbreviated))
+                        .foregroundStyle(Color.primary.opacity(0.6))
+                        .font(.caption)
                 }
             }
             .chartYAxis {
@@ -160,60 +138,42 @@ struct DashboardView: View {
             .chartLegend(.hidden)
             .frame(height: 220)
             .animation(.spring(response: 0.6, dampingFraction: 0.8), value: syncData)
-            .animation(.easeInOut, value: timeScale)
         }
         .padding(24)
         .background(.ultraThinMaterial)
         .cornerRadius(28)
         .shadow(color: Color.black.opacity(0.05), radius: 25, x: 0, y: 15)
         .onAppear {
-            playRealDataAnimation()
+            refreshData()
         }
         .onChange(of: healthQueryManager.isSyncing) { isSyncing in
             if !isSyncing {
                 // Refresh after sync finishes
-                playRealDataAnimation()
-            }
-        }
-        .onChange(of: timeScale) { _ in
-            Task {
-                await fetchDashboardStats()
+                refreshData()
             }
         }
         .onChange(of: serverDiscoveryManager.resolvedURL) { newURL in
             if newURL != nil {
-                playRealDataAnimation()
+                refreshData()
             }
         }
     }
     
-    private func playRealDataAnimation() {
-        animationTask?.cancel()
-        animationTask = Task {
-            await MainActor.run { timeScale = .days }
-            await fetchDashboardStats()
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
-            
-            guard !Task.isCancelled else { return }
-            await MainActor.run { timeScale = .weeks }
-            await fetchDashboardStats()
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
-            
-            guard !Task.isCancelled else { return }
-            await MainActor.run { timeScale = .months }
+    private func refreshData() {
+        fetchTask?.cancel()
+        fetchTask = Task {
             await fetchDashboardStats()
         }
     }
     
     private func fetchDashboardStats() async {
-        let currentScale = timeScale
-        let cacheKey = "dashboard_cache_\(currentScale.rawValue)"
+        let cacheKey = "dashboard_cache_months"
         
         // 1. Load from cache immediately
         if let cachedData = UserDefaults.standard.data(forKey: cacheKey),
            let response = try? JSONDecoder().decode(ServerStatsResponse.self, from: cachedData) {
             await MainActor.run {
-                if timeScale == currentScale { updateChartData(from: response.stats) }
+                updateChartData(from: response.stats)
             }
         }
         
@@ -226,14 +186,14 @@ struct DashboardView: View {
             let data = try await syncEngine.fetchStats(
                 serverURL: serverURL,
                 apiKey: apiKey,
-                timeScale: currentScale.rawValue,
+                timeScale: "months",
                 deviceId: deviceId
             )
             
             if let decoded = try? JSONDecoder().decode(ServerStatsResponse.self, from: data) {
                 UserDefaults.standard.set(data, forKey: cacheKey)
                 await MainActor.run {
-                    if timeScale == currentScale { updateChartData(from: decoded.stats) }
+                    updateChartData(from: decoded.stats)
                 }
             }
         } catch {
