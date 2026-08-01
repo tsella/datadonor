@@ -13,6 +13,8 @@ struct DataDonorApp: App {
                 .environmentObject(healthStoreManager)
                 .environmentObject(serverDiscoveryManager)
                 .environmentObject(appDelegate.networkMonitor)
+                .environmentObject(appDelegate.healthQueryManager)
+                .environmentObject(appDelegate.syncEngine)
         }
     }
 }
