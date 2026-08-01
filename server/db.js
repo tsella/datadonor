@@ -57,6 +57,17 @@ async function setupDatabase() {
         );
     `);
 
+    await db.exec(`
+        CREATE TABLE IF NOT EXISTS daily_sync_stats (
+            device_id TEXT,
+            date_bucket TEXT,
+            data_type TEXT,
+            record_count INTEGER DEFAULT 0,
+            PRIMARY KEY (device_id, date_bucket, data_type),
+            FOREIGN KEY (device_id) REFERENCES devices(device_id)
+        );
+    `);
+
     // Create index if not exists
     const indexCheck = await db.get(`
         SELECT count(*) as count FROM sqlite_master WHERE type='index' AND name='idx_metrics_type_date';
