@@ -3,7 +3,7 @@ import HealthKit
 import UIKit
 
 @MainActor
-class HealthQueryManager: ObservableObject {
+final class HealthQueryManager: ObservableObject, @unchecked Sendable {
     let healthStore = HKHealthStore()
     @Published var isSyncing = false
     private var isCancelled = false
