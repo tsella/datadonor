@@ -7,6 +7,7 @@ struct ContentView: View {
     @EnvironmentObject var networkMonitor: NetworkMonitor
     @EnvironmentObject var syncEngine: SyncEngine
     @AppStorage("apiKey") private var apiKey = ""
+    @AppStorage("customServerURL") private var customServerURL = ""
     
     var body: some View {
         NavigationStack {
@@ -107,10 +108,11 @@ struct ContentView: View {
                     } else {
                         Button(action: {
                             Task {
+                                let overrideURL = URL(string: customServerURL)
                                 await healthQueryManager.performSync(
                                     syncEngine: syncEngine,
                                     networkMonitor: networkMonitor,
-                                    serverURL: serverDiscoveryManager.resolvedURL,
+                                    serverURL: overrideURL ?? serverDiscoveryManager.resolvedURL,
                                     apiKey: apiKey
                                 )
                             }
