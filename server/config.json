@@ -1,0 +1,20 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8443,
+    "ssl": {
+      "key_path": "./certs/key.pem",
+      "cert_path": "./certs/cert.pem"
+    }
+  },
+  "security": {
+    "api_key": "REPLACE_ME_WITH_A_SECRET_KEY"
+  },
+  "database": {
+    "path": "./data/datadonor.sqlite"
+  },
+  "logging": {
+    "level": "info",
+    "retention_days": 7
+  }
+}

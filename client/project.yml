@@ -13,5 +13,7 @@ targets:
       path: Info.plist
       properties:
         UILaunchScreen: {}
+        NSHealthShareUsageDescription: "DataDonor needs access to read your health data to securely sync it to your personal server."
+        NSHealthUpdateUsageDescription: "DataDonor needs access to write your health data to securely sync it to your personal server."
     entitlements:
       path: DataDonor.entitlements
