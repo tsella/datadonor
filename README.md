@@ -20,6 +20,9 @@ DataDonor comprehensively extracts both time-series quantity samples and categor
 ## Server Specification
 This app requires a backend server to receive the data. See the `server_specification.md` document for the full JSON payload specifications, checkpoint syncing mechanics, and endpoint requirements.
 
+## Data Analysis Examples
+Want to visualize the data once it hits the database? We've provided a complete Python guide on extracting, formatting, and plotting your health metrics (like Heart Rate overlaid with Sleep and Exercise times) in the [`data_analysis_examples.md`](data_analysis_examples.md) document.
+
 ## Deployment to Personal Device
 To run DataDonor on your personal iPhone, you must build and deploy it directly from Xcode. Please note that Apple requires an Apple Developer account to deploy custom apps that utilize HealthKit entitlements to a physical device.
 
