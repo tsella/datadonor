@@ -138,6 +138,17 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
         }
     }
     
+    private func resetAllAnchors() {
+        for key in UserDefaults.standard.dictionaryRepresentation().keys {
+            if key.hasPrefix("anchor_") {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+        UserDefaults.standard.set(0.0, forKey: "lastSyncTimestamp")
+        UserDefaults.standard.set(0, forKey: "totalRecordsSynced")
+        UserDefaults.standard.synchronize()
+    }
+    
     func performSync(syncEngine: SyncEngine, networkMonitor: NetworkMonitor, serverURL: URL?, apiKey: String) async {
         guard let url = serverURL else {
             DataDonorLogger.shared.log("Skipping sync: No server URL resolved.", level: .warn)
@@ -156,6 +167,17 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
         
         defer {
             self.isSyncing = false
+        }
+        
+        let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? "unknown"
+        do {
+            let serverHasData = try await syncEngine.fetchServerCheckpoint(serverURL: url, apiKey: apiKey, deviceId: deviceId)
+            if !serverHasData {
+                DataDonorLogger.shared.log("Server has no data for device. Resetting local anchors to force full resync.", level: .info)
+                self.resetAllAnchors()
+            }
+        } catch {
+            DataDonorLogger.shared.log("Failed to fetch server checkpoint: \(error)", level: .warn)
         }
         
         let allQuantities = getAllSupportedQuantityTypes().compactMap { HKObjectType.quantityType(forIdentifier: $0) }
