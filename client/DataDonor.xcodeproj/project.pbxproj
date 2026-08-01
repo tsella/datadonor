@@ -17,6 +17,7 @@
 		807618975E0B37A859F631F6 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0502AA9B461C6FB7570609 /* ContentView.swift */; };
 		8A17547229C35C18E008CA3F /* HealthStoreManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ACD28D0D80DD95A19E0A3DD /* HealthStoreManager.swift */; };
 		9DBDDD0A4BA024F7EB218507 /* SyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A65ED0883FB0D15D811CB1 /* SyncEngine.swift */; };
+		B55086198964E9FAE21AC200 /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93758C072125F4884F24FA0D /* QRScannerView.swift */; };
 		B7F0DB00B82B875BC95F4A74 /* HealthQueryManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDC2BE44061E01864982FC3E /* HealthQueryManager.swift */; };
 		CBFADF0A2575755766133D24 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EEDABAD12BF5B43F630B560A /* Assets.xcassets */; };
 		DC18FB43A4574BBF3EE79E0C /* HealthDataPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43AA60B52B0FE33DA4F10BEE /* HealthDataPayload.swift */; };
@@ -35,6 +36,7 @@
 		7443C994A99D979FE01BD8AD /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		888D8220FCE0DF54E65F5D58 /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
 		8890EB4CCFD0D6FA7698C180 /* DataDonor.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = DataDonor.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		93758C072125F4884F24FA0D /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
 		AB5214F6C8D7802B7C6AE774 /* LogViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogViewer.swift; sourceTree = "<group>"; };
 		B5A65ED0883FB0D15D811CB1 /* SyncEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncEngine.swift; sourceTree = "<group>"; };
 		B871FF1D06DC360984B8B117 /* DataDonorLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataDonorLogger.swift; sourceTree = "<group>"; };
@@ -59,6 +61,7 @@
 			children = (
 				41C75D75B020EABE31D365A1 /* DashboardView.swift */,
 				AB5214F6C8D7802B7C6AE774 /* LogViewer.swift */,
+				93758C072125F4884F24FA0D /* QRScannerView.swift */,
 				7443C994A99D979FE01BD8AD /* SettingsView.swift */,
 			);
 			path = Views;
@@ -191,6 +194,7 @@
 				337EB1F43C526BA3EAC46601 /* LogViewer.swift in Sources */,
 				F74C93FAC4FB849646D52458 /* NetworkMonitor.swift in Sources */,
 				F3C2BB7BAAC6F69B8530607E /* NotificationManager.swift in Sources */,
+				B55086198964E9FAE21AC200 /* QRScannerView.swift in Sources */,
 				3FE5E493BD7E9B0C8160E7F8 /* ServerDiscoveryManager.swift in Sources */,
 				359D2E5A6ADFDFA64193D5E8 /* SettingsView.swift in Sources */,
 				9DBDDD0A4BA024F7EB218507 /* SyncEngine.swift in Sources */,

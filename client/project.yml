@@ -21,6 +21,7 @@ targets:
         NSHealthShareUsageDescription: "DataDonor needs access to read your health data to securely sync it to your personal server."
         NSHealthUpdateUsageDescription: "DataDonor needs access to write your health data to securely sync it to your personal server."
         NSLocationWhenInUseUsageDescription: "DataDonor needs your location to detect the current Wi-Fi network and verify you are connected to your target server."
+        NSCameraUsageDescription: "DataDonor needs access to the camera to scan your API Key QR Code."
         NSLocalNetworkUsageDescription: "DataDonor needs access to your local network to discover your Fastify syncing server automatically."
         NSBonjourServices:
           - "_datadonor._tcp"
