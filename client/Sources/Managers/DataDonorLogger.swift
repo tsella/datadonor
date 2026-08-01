@@ -93,7 +93,11 @@ final class DataDonorLogger: @unchecked Sendable {
     
     func readAllLogs() async -> [String] {
         return await withCheckedContinuation { continuation in
-            logQueue.async {
+            logQueue.async { [weak self] in
+                guard let self = self else {
+                    continuation.resume(returning: [])
+                    return
+                }
                 var allLines: [String] = []
                 do {
                     let files = try FileManager.default.contentsOfDirectory(at: self.logsDirectory, includingPropertiesForKeys: [.creationDateKey])
