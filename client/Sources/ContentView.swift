@@ -26,16 +26,34 @@ struct ContentView: View {
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 25) {
                     // Header Logo & Title
-                    VStack(spacing: 10) {
-                        Image("Logo")
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 80, height: 80)
-                            .shadow(color: Color.black.opacity(0.15), radius: 10, x: 0, y: 5)
+                    ZStack(alignment: .topTrailing) {
+                        HStack {
+                            Spacer()
+                            VStack(spacing: 10) {
+                                Image("Logo")
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fit)
+                                    .frame(width: 80, height: 80)
+                                    .shadow(color: Color.black.opacity(0.15), radius: 10, x: 0, y: 5)
+                                
+                                Text("DataDonor")
+                                    .font(.system(size: 32, weight: .heavy, design: .rounded))
+                                    .foregroundColor(Color.primary.opacity(0.85))
+                            }
+                            Spacer()
+                        }
                         
-                        Text("DataDonor")
-                            .font(.system(size: 32, weight: .heavy, design: .rounded))
-                            .foregroundColor(Color.primary.opacity(0.85))
+                        NavigationLink(destination: SettingsView()) {
+                            Image(systemName: "gearshape.fill")
+                                .font(.title3)
+                                .foregroundColor(Color.primary.opacity(0.6))
+                                .padding(12)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Circle())
+                                .shadow(color: Color.black.opacity(0.05), radius: 8, x: 0, y: 4)
+                        }
+                        .padding(.trailing, 20)
+                        .padding(.top, 10)
                     }
                     .padding(.top, 10)
                     
@@ -167,23 +185,11 @@ struct ContentView: View {
                             .padding(.bottom, 30)
                         }
                     }
-                }
                     }
                 }
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    NavigationLink(destination: SettingsView()) {
-                        Image(systemName: "gearshape.fill")
-                            .font(.title3)
-                            .foregroundColor(Color.primary.opacity(0.6))
-                            .padding(8)
-                            .background(.ultraThinMaterial)
-                            .clipShape(Circle())
-                    }
-                }
-            }
         }
     }
+}
