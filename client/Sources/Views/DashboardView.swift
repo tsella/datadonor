@@ -130,27 +130,19 @@ struct DashboardView: View {
                 }
             }
             .chartXAxis {
-                if timeScale == .days {
-                    AxisMarks(values: .stride(by: .day)) { _ in
-                        AxisGridLine(stroke: StrokeStyle(lineWidth: 1, dash: [4]))
-                            .foregroundStyle(Color.gray.opacity(0.15))
-                        AxisValueLabel(format: .dateTime.weekday(.abbreviated))
+                AxisMarks { _ in
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: 1, dash: [4]))
+                        .foregroundStyle(Color.gray.opacity(0.15))
+                    if timeScale == .days {
+                        AxisValueLabel(format: .dateTime.month().day())
                             .foregroundStyle(Color.primary.opacity(0.6))
                             .font(.caption)
-                    }
-                } else if timeScale == .weeks {
-                    AxisMarks(values: .stride(by: .weekOfYear)) { _ in
-                        AxisGridLine(stroke: StrokeStyle(lineWidth: 1, dash: [4]))
-                            .foregroundStyle(Color.gray.opacity(0.15))
-                        AxisValueLabel(format: .dateTime.week())
+                    } else if timeScale == .weeks {
+                        AxisValueLabel(format: .dateTime.month().day())
                             .foregroundStyle(Color.primary.opacity(0.6))
                             .font(.caption)
-                    }
-                } else {
-                    AxisMarks(values: .stride(by: .month)) { _ in
-                        AxisGridLine(stroke: StrokeStyle(lineWidth: 1, dash: [4]))
-                            .foregroundStyle(Color.gray.opacity(0.15))
-                        AxisValueLabel(format: .dateTime.month(.abbreviated))
+                    } else {
+                        AxisValueLabel(format: .dateTime.year().month(.abbreviated))
                             .foregroundStyle(Color.primary.opacity(0.6))
                             .font(.caption)
                     }
