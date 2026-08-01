@@ -77,6 +77,22 @@ async function setupDatabase() {
         await db.exec(`CREATE INDEX idx_metrics_type_date ON health_metrics(data_type, start_date);`);
     }
 
+    // Backfill summary table if needed
+    const statsCheck = await db.get(`SELECT count(*) as count FROM daily_sync_stats`);
+    if (statsCheck.count === 0) {
+        const metricsCheck = await db.get(`SELECT count(*) as count FROM health_metrics`);
+        if (metricsCheck.count > 0) {
+            logger.info('Backfilling daily_sync_stats from existing health_metrics... This might take a moment.');
+            await db.exec(`
+                INSERT INTO daily_sync_stats (device_id, date_bucket, data_type, record_count)
+                SELECT device_id, date(start_date), data_type, COUNT(*)
+                FROM health_metrics
+                GROUP BY device_id, date(start_date), data_type;
+            `);
+            logger.info('Backfill complete!');
+        }
+    }
+
     logger.info('Database migrations completed successfully.');
     return db;
 }
