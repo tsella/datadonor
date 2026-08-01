@@ -6,44 +6,21 @@ struct SyncDataPoint: Identifiable, Equatable {
     let date: Date
     let type: String
     let count: Int
-    let density: Double
+    // Using a default density of 0.8 for the bar width since it was added later
+    var density: Double = 0.8
 }
 
 enum TimeScale {
-    case days, months, years
+    case days, weeks, months
 }
 
 struct DashboardView: View {
     @AppStorage("totalRecordsSynced") private var totalRecordsSynced: Int = 0
     @AppStorage("lastSyncTimestamp") private var storedLastSync: Double = 0.0
+    @EnvironmentObject var healthQueryManager: HealthQueryManager
+    
     @State private var timeScale: TimeScale = .days
-    @State private var phase: Double = 0.0
-    
-    let timer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
-    
-    var syncData: [SyncDataPoint] {
-        let calendar = Calendar.current
-        let today = Date()
-        var points: [SyncDataPoint] = []
-        let types = ["Heart Rate", "Steps", "Sleep", "Workouts"]
-        
-        for i in 0..<7 {
-            let date = calendar.date(byAdding: .day, value: -6 + i, to: today)!
-            for (typeIndex, type) in types.enumerated() {
-                // Base height
-                let base = Double(i * 10 + typeIndex * 15 + 20)
-                
-                // Create a wave effect based on phase, offset by the bar's position
-                let offset = Double(i) * 0.5 + Double(typeIndex) * 0.2
-                
-                // Heartbeat pulse math: sharp peaks, flat troughs
-                let wave = pow(sin(phase - offset), 4) * 50
-                
-                points.append(SyncDataPoint(date: date, type: type, count: Int(base + wave), density: 0.8))
-            }
-        }
-        return points
-    }
+    @State private var syncData: [SyncDataPoint] = []
     
     // Custom curated pastel palette
     let chartColors: [String: Color] = [
@@ -64,7 +41,14 @@ struct DashboardView: View {
                         .foregroundColor(Color.primary.opacity(0.85))
                     
                     HStack(spacing: 6) {
-                        if storedLastSync > 0 {
+                        if healthQueryManager.isSyncing {
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(Color(red: 0.65, green: 0.5, blue: 0.9))
+                            Text("Sync in progress...")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else if storedLastSync > 0 {
                             Text("Last synced: \(Date(timeIntervalSince1970: storedLastSync), style: .time)")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
@@ -108,15 +92,8 @@ struct DashboardView: View {
             // Animated Chart
             Chart {
                 ForEach(syncData) { item in
-                    let unit: Calendar.Component = {
-                        switch timeScale {
-                        case .days: return .day
-                        case .months: return .month
-                        case .years: return .year
-                        }
-                    }()
                     BarMark(
-                        x: .value("Date", item.date, unit: unit),
+                        x: .value("Date", item.date, unit: timeScale == .days ? .day : (timeScale == .weeks ? .weekOfYear : .month)),
                         y: .value("Records", item.count),
                         width: .ratio(CGFloat(item.density))
                     )
@@ -129,32 +106,23 @@ struct DashboardView: View {
                     AxisMarks(values: .stride(by: .day)) { _ in
                         AxisGridLine(stroke: StrokeStyle(lineWidth: 1, dash: [4]))
                             .foregroundStyle(Color.gray.opacity(0.15))
-                        AxisValueLabel(format: .dateTime.weekday(.abbreviated), centered: true)
+                        AxisValueLabel(format: .dateTime.weekday(.abbreviated))
                             .foregroundStyle(Color.primary.opacity(0.6))
                             .font(.caption)
                     }
-                } else if timeScale == .months {
-                    // Omit explicit stride so Swift Charts automatically spaces the 24 months nicely
-                    AxisMarks { value in
+                } else if timeScale == .weeks {
+                    AxisMarks(values: .stride(by: .weekOfYear)) { _ in
                         AxisGridLine(stroke: StrokeStyle(lineWidth: 1, dash: [4]))
                             .foregroundStyle(Color.gray.opacity(0.15))
-                        AxisValueLabel(centered: true) {
-                            if let date = value.as(Date.self) {
-                                VStack(spacing: 2) {
-                                    Text(date, format: .dateTime.month(.abbreviated))
-                                        .font(.caption)
-                                    Text(date, format: .dateTime.year())
-                                        .font(.caption2)
-                                }
-                                .foregroundStyle(Color.primary.opacity(0.6))
-                            }
-                        }
+                        AxisValueLabel(format: .dateTime.week())
+                            .foregroundStyle(Color.primary.opacity(0.6))
+                            .font(.caption)
                     }
                 } else {
-                    AxisMarks(values: .stride(by: .year)) { _ in
+                    AxisMarks(values: .stride(by: .month)) { _ in
                         AxisGridLine(stroke: StrokeStyle(lineWidth: 1, dash: [4]))
                             .foregroundStyle(Color.gray.opacity(0.15))
-                        AxisValueLabel(format: .dateTime.year(), centered: true)
+                        AxisValueLabel(format: .dateTime.month(.abbreviated))
                             .foregroundStyle(Color.primary.opacity(0.6))
                             .font(.caption)
                     }
@@ -170,20 +138,73 @@ struct DashboardView: View {
                 }
             }
             .chartLegend(.hidden)
-            .chartYScale(domain: 0...150)
             .frame(height: 220)
-            .animation(.interactiveSpring(response: 0.3, dampingFraction: 0.8), value: phase)
+            .animation(.spring(response: 0.6, dampingFraction: 0.8), value: syncData)
+            .animation(.easeInOut, value: timeScale)
         }
         .padding(24)
         .background(.ultraThinMaterial)
         .cornerRadius(28)
         .shadow(color: Color.black.opacity(0.05), radius: 25, x: 0, y: 15)
-        .onReceive(timer) { _ in
-            withAnimation {
-                phase += 0.15
+        .onAppear {
+            if syncData.isEmpty {
+                playVisualAnimation()
+            }
+        }
+        .onChange(of: healthQueryManager.isSyncing) { isSyncing in
+            if isSyncing {
+                playVisualAnimation()
             }
         }
     }
     
-
+    func playVisualAnimation() {
+        syncData = []
+        timeScale = .days
+        
+        let types = ["Heart Rate", "Steps", "Sleep", "Workouts"]
+        let calendar = Calendar.current
+        let today = Date()
+        
+        // Stage 1: Sync Days
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            var daysData: [SyncDataPoint] = []
+            for dayOffset in (0..<7).reversed() {
+                guard let date = calendar.date(byAdding: .day, value: -dayOffset, to: today) else { continue }
+                for type in types {
+                    let maxCount = (type == "Sleep" || type == "Workouts") ? 5 : 800
+                    daysData.append(SyncDataPoint(date: date, type: type, count: Int.random(in: 1...maxCount)))
+                }
+            }
+            syncData = daysData
+            
+            // Stage 2: Sync Weeks
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                timeScale = .weeks
+                var weeksData: [SyncDataPoint] = []
+                for weekOffset in (0..<4).reversed() {
+                    guard let date = calendar.date(byAdding: .weekOfYear, value: -weekOffset, to: today) else { continue }
+                    for type in types {
+                        let maxCount = (type == "Sleep" || type == "Workouts") ? 35 : 5600
+                        weeksData.append(SyncDataPoint(date: date, type: type, count: Int.random(in: 20...maxCount)))
+                    }
+                }
+                syncData = weeksData
+                
+                // Stage 3: Sync Months
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    timeScale = .months
+                    var monthsData: [SyncDataPoint] = []
+                    for monthOffset in (0..<6).reversed() {
+                        guard let date = calendar.date(byAdding: .month, value: -monthOffset, to: today) else { continue }
+                        for type in types {
+                            let maxCount = (type == "Sleep" || type == "Workouts") ? 150 : 24000
+                            monthsData.append(SyncDataPoint(date: date, type: type, count: Int.random(in: 100...maxCount)))
+                        }
+                    }
+                    syncData = monthsData
+                }
+            }
+        }
+    }
 }
