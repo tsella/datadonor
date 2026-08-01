@@ -57,7 +57,7 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
     
     // MARK: - Async Stubs & Sync
     
-    func fetchServerCheckpoint(serverURL: URL, apiKey: String, deviceId: String) async throws -> Bool {
+    func fetchServerCheckpoint(serverURL: URL, apiKey: String, deviceId: String) async throws -> [String: String]? {
         let url = serverURL.appendingPathComponent("/api/v1/health-sync/checkpoint")
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -67,12 +67,11 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
         let (data, response) = try await ephemeralSession.data(for: request)
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let checkpoints = json["checkpoints"] as? [String: Any] {
-                // If the server has no checkpoints, it has no data for this device
-                return !checkpoints.isEmpty
+               let checkpoints = json["checkpoints"] as? [String: String] {
+                return checkpoints
             }
         }
-        return true // default to true to prevent accidental data wipes
+        return nil
     }
     
     func ping(url: URL, apiKey: String) async throws -> Bool {

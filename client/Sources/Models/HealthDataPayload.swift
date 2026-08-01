@@ -4,11 +4,13 @@ struct HealthDataPayload: Codable {
     let deviceId: String
     let syncTimestamp: String
     let data: [HealthDataPoint]
+    let anchors: [String: String]?
     
     enum CodingKeys: String, CodingKey {
         case deviceId = "device_id"
         case syncTimestamp = "sync_timestamp"
         case data
+        case anchors
     }
 }
 
