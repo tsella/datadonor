@@ -20,6 +20,15 @@ DataDonor comprehensively extracts both time-series quantity samples and categor
 ## Server Specification
 This app requires a backend server to receive the data. See the `server_specification.md` document for the full JSON payload specifications, checkpoint syncing mechanics, and endpoint requirements.
 
+## Deployment to Personal Device
+To run DataDonor on your personal iPhone, you must build and deploy it directly from Xcode. Please note that Apple requires an Apple Developer account to deploy custom apps that utilize HealthKit entitlements to a physical device.
+
+1. Register for an [Apple Developer Account](https://developer.apple.com/) (a free tier account is sufficient, though the app will expire every 7 days and require a rebuild. A paid account allows 1-year provisioning).
+2. Open `client/DataDonor.xcodeproj` in Xcode.
+3. In the project navigator, select the `DataDonor` target, navigate to the **Signing & Capabilities** tab, and select your Personal Team from the dropdown.
+4. Ensure the **HealthKit** and **Access WiFi Information** capabilities are active and provisioned without red errors.
+5. Connect your iPhone to your Mac, select it as the run destination at the top, and hit **Cmd + R** to build and deploy!
+
 ## Data Privacy & Security Responsibility
 ⚠️ **IMPORTANT**: DataDonor is designed to give you complete ownership and control over your personal health data by extracting it from Apple's ecosystem and transmitting it to your own self-hosted server. 
 
