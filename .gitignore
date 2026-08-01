@@ -8,3 +8,4 @@ server/logs/
 client/build/
 server/config.json
 server/data/
+server/certs/
