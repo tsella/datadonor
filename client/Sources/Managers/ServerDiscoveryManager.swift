@@ -14,30 +14,50 @@ class ServerDiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
     }
     
     func startDiscovery() {
+        print("[Bonjour] Starting discovery for _datadonor._tcp in domain local.")
         browser.searchForServices(ofType: "_datadonor._tcp", inDomain: "local.")
     }
     
     func stopDiscovery() {
+        print("[Bonjour] Stopping discovery.")
         browser.stop()
         resolvingServices.removeAll()
     }
     
     // MARK: - NetServiceBrowserDelegate
     
+    func netServiceBrowserWillSearch(_ browser: NetServiceBrowser) {
+        print("[Bonjour] Browser will search.")
+    }
+    
+    func netServiceBrowserDidStopSearch(_ browser: NetServiceBrowser) {
+        print("[Bonjour] Browser did stop search.")
+    }
+    
+    func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String : NSNumber]) {
+        print("[Bonjour] Browser did not search. Error: \(errorDict)")
+    }
+    
     func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
+        print("[Bonjour] Found service: \(service.name) (type: \(service.type), domain: \(service.domain))")
         service.delegate = self
         resolvingServices.append(service)
+        print("[Bonjour] Attempting to resolve service: \(service.name)")
         service.resolve(withTimeout: 5.0)
     }
     
     func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
+        print("[Bonjour] Removed service: \(service.name)")
         resolvingServices.removeAll(where: { $0 == service })
     }
     
     // MARK: - NetServiceDelegate
     
     func netServiceDidResolveAddress(_ sender: NetService) {
-        guard let hostName = sender.hostName else { return }
+        guard let hostName = sender.hostName else {
+            print("[Bonjour] Service resolved but hostName is nil: \(sender.name)")
+            return
+        }
         
         var cleanHost = hostName
         if cleanHost.hasSuffix(".") {
@@ -45,7 +65,10 @@ class ServerDiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
         }
         
         let port = sender.port
+        print("[Bonjour] Service resolved successfully! Host: \(cleanHost), Port: \(port)")
+        
         if let url = URL(string: "https://\(cleanHost):\(port)") {
+            print("[Bonjour] Constructed URL: \(url.absoluteString)")
             DispatchQueue.main.async {
                 self.resolvedURL = url
             }
@@ -55,6 +78,7 @@ class ServerDiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
     }
     
     func netService(_ sender: NetService, didNotResolve errorDict: [String : NSNumber]) {
+        print("[Bonjour] Failed to resolve service \(sender.name). Error: \(errorDict)")
         resolvingServices.removeAll(where: { $0 == sender })
     }
 }
