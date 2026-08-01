@@ -1,6 +1,6 @@
 import Foundation
 
-class SyncEngine: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
+class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTaskDelegate {
     private var session: URLSession!
     var backgroundCompletionHandler: (() -> Void)?
     
