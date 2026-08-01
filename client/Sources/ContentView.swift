@@ -40,7 +40,7 @@ struct ContentView: View {
                     
                     // Server Connection Glassmorphism Card
                     VStack(spacing: 12) {
-                        if let url = serverDiscoveryManager.resolvedURL {
+                        if let url = (!customServerURL.isEmpty ? URL(string: customServerURL) : serverDiscoveryManager.resolvedURL) {
                             HStack {
                                 Image(systemName: "server.rack")
                                     .font(.title3)
