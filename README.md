@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="/Users/tsella/.gemini/antigravity/brain/d5896aac-9ddd-44a6-b8ea-284b465c1acd/datadonor_app_icon_transparent_1785537226058.jpg" alt="DataDonor Logo" width="200" />
+  <img src="/Users/tsella/.gemini/antigravity/brain/d5896aac-9ddd-44a6-b8ea-284b465c1acd/datadonor_app_icon_transparent.png" alt="DataDonor Logo" width="200" />
 </div>
 
 # DataDonor
