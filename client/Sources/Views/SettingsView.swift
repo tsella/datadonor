@@ -6,6 +6,7 @@ struct SettingsView: View {
     @AppStorage("isSSIDLocked") private var isSSIDLocked = false
     @AppStorage("customServerURL") private var customServerURL = ""
     @EnvironmentObject private var networkMonitor: NetworkMonitor
+    @EnvironmentObject private var serverDiscoveryManager: ServerDiscoveryManager
     
     @AppStorage("isApiKeyVerified") private var isApiKeyVerified = false
     
@@ -66,6 +67,21 @@ struct SettingsView: View {
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled(true)
+                
+                if customServerURL.isEmpty {
+                    HStack {
+                        Text("Discovered:")
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        if let resolved = serverDiscoveryManager.resolvedURL {
+                            Text(resolved.absoluteString)
+                                .foregroundColor(.green)
+                        } else {
+                            Text("Searching...")
+                                .foregroundColor(.orange)
+                        }
+                    }
+                }
             }
             
             Section(header: Text("Debugging")) {
