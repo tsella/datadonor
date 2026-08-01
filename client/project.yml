@@ -20,5 +20,10 @@ targets:
         NSHealthShareUsageDescription: "DataDonor needs access to read your health data to securely sync it to your personal server."
         NSHealthUpdateUsageDescription: "DataDonor needs access to write your health data to securely sync it to your personal server."
         NSLocationWhenInUseUsageDescription: "DataDonor needs your location to detect the current Wi-Fi network and verify you are connected to your target server."
+        BGTaskSchedulerPermittedIdentifiers:
+          - "la.tsel.datadonor.backgroundSync"
+        UIBackgroundModes:
+          - "fetch"
+          - "processing"
     entitlements:
       path: DataDonor.entitlements
