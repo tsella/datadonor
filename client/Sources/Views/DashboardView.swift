@@ -170,6 +170,11 @@ struct DashboardView: View {
         .onChange(of: timeScale) { _ in
             fetchDashboardStats()
         }
+        .onChange(of: serverDiscoveryManager.resolvedURL) { newURL in
+            if newURL != nil {
+                fetchDashboardStats()
+            }
+        }
     }
     
     private func fetchDashboardStats() {
