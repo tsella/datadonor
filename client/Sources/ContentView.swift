@@ -21,17 +21,11 @@ struct ContentView: View {
                 VStack(spacing: 25) {
                     // Header Logo & Title
                     VStack(spacing: 10) {
-                        Image(systemName: "heart.text.square.fill")
+                        Image("Logo")
                             .resizable()
                             .aspectRatio(contentMode: .fit)
-                            .frame(width: 70, height: 70)
-                            .foregroundStyle(
-                                LinearGradient(
-                                    colors: [Color(red: 1.0, green: 0.6, blue: 0.7), Color(red: 0.7, green: 0.5, blue: 0.9)],
-                                    startPoint: .top, endPoint: .bottom
-                                )
-                            )
-                            .shadow(color: Color(red: 1.0, green: 0.6, blue: 0.7).opacity(0.4), radius: 15, x: 0, y: 8)
+                            .frame(width: 80, height: 80)
+                            .shadow(color: Color.black.opacity(0.15), radius: 10, x: 0, y: 5)
                         
                         Text("DataDonor")
                             .font(.system(size: 32, weight: .heavy, design: .rounded))
