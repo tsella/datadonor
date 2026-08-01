@@ -68,6 +68,8 @@ fastify.get('/api/v1/health-sync/checkpoint', async (request, reply) => {
 });
 
 // Endpoint: C. Data Ingestion
+let dbQueue = Promise.resolve();
+
 fastify.post('/api/v1/health-sync/post', async (request, reply) => {
     const { device_id, sync_timestamp, data } = request.body;
     
@@ -75,8 +77,11 @@ fastify.post('/api/v1/health-sync/post', async (request, reply) => {
         return reply.status(400).send({ error: 'Invalid payload schema' });
     }
 
-    try {
-        const db = await getDb();
+    // Queue DB writes to prevent SQLITE_ERROR: cannot start a transaction within a transaction
+    return new Promise((resolve, reject) => {
+        dbQueue = dbQueue.then(async () => {
+            try {
+                const db = await getDb();
         
         // Register device if not exists
         await db.run('INSERT OR IGNORE INTO devices (device_id, name) VALUES (?, ?)', [device_id, 'Unknown iOS Device']);
@@ -104,7 +109,7 @@ fastify.post('/api/v1/health-sync/post', async (request, reply) => {
         await db.run('COMMIT');
 
         logger.info(`Successfully ingested ${data.length} metrics from device ${device_id}`);
-        return reply.status(201).send({ status: 'created', inserted: data.length });
+        resolve(reply.status(201).send({ status: 'created', inserted: data.length }));
     } catch (err) {
         logger.error(`Data ingestion failed: ${err.message}`);
         try {
@@ -113,8 +118,10 @@ fastify.post('/api/v1/health-sync/post', async (request, reply) => {
         } catch (rollbackErr) {
             logger.error(`Rollback failed: ${rollbackErr.message}`);
         }
-        return reply.status(500).send({ error: 'Failed to ingest data' });
+        resolve(reply.status(500).send({ error: 'Failed to ingest data' }));
     }
+        });
+    });
 });
 
 // Start Server
