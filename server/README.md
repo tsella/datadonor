@@ -25,8 +25,8 @@ openssl req -x509 -newkey rsa:4096 -keyout certs/key.pem -out certs/cert.pem -da
 ```
 
 ## 3. Configuration
-On the very first run, the server will auto-generate a `config.json` file in the root directory and exit.
-1. Run `node app.js` to generate the file.
+Copy the provided `config.json.example` template to a new `config.json` file in the root directory:
+1. Run `cp config.json.example config.json`.
 2. Open `config.json` and change the `api_key` under `security` to a strong, random password.
 3. Enter this exact API key into the Settings tab of the DataDonor iOS app.
 
