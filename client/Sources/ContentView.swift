@@ -106,38 +106,65 @@ struct ContentView: View {
                         .padding(.horizontal, 30)
                         .padding(.bottom, 30)
                     } else {
-                        Button(action: {
-                            Task {
-                                let overrideURL = URL(string: customServerURL)
-                                await healthQueryManager.performSync(
-                                    syncEngine: syncEngine,
-                                    networkMonitor: networkMonitor,
-                                    serverURL: overrideURL ?? serverDiscoveryManager.resolvedURL,
-                                    apiKey: apiKey
+                        if healthQueryManager.isSyncing {
+                            Button(action: {
+                                healthQueryManager.cancelSync()
+                            }) {
+                                HStack {
+                                    Image(systemName: "stop.circle.fill")
+                                    Text("Stop Sync")
+                                        .fontWeight(.bold)
+                                }
+                                .font(.title3)
+                                .foregroundColor(.white)
+                                .padding(.vertical, 18)
+                                .frame(maxWidth: .infinity)
+                                .background(
+                                    LinearGradient(
+                                        colors: [Color(red: 0.9, green: 0.4, blue: 0.4), Color(red: 0.8, green: 0.3, blue: 0.3)],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
                                 )
+                                .cornerRadius(25)
+                                .shadow(color: Color(red: 0.9, green: 0.4, blue: 0.4).opacity(0.4), radius: 15, x: 0, y: 8)
                             }
-                        }) {
-                            HStack {
-                                Image(systemName: "arrow.triangle.2.circlepath")
-                                Text("Sync Now")
-                                    .fontWeight(.bold)
-                            }
-                            .font(.title3)
-                            .foregroundColor(.white)
-                            .padding(.vertical, 18)
-                            .frame(maxWidth: .infinity)
-                            .background(
-                                LinearGradient(
-                                    colors: [Color(red: 0.4, green: 0.6, blue: 0.9), Color(red: 0.3, green: 0.5, blue: 0.8)],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
+                            .padding(.horizontal, 30)
+                            .padding(.bottom, 30)
+                        } else {
+                            Button(action: {
+                                Task {
+                                    let overrideURL = URL(string: customServerURL)
+                                    await healthQueryManager.performSync(
+                                        syncEngine: syncEngine,
+                                        networkMonitor: networkMonitor,
+                                        serverURL: overrideURL ?? serverDiscoveryManager.resolvedURL,
+                                        apiKey: apiKey
+                                    )
+                                }
+                            }) {
+                                HStack {
+                                    Image(systemName: "arrow.triangle.2.circlepath")
+                                    Text("Sync Now")
+                                        .fontWeight(.bold)
+                                }
+                                .font(.title3)
+                                .foregroundColor(.white)
+                                .padding(.vertical, 18)
+                                .frame(maxWidth: .infinity)
+                                .background(
+                                    LinearGradient(
+                                        colors: [Color(red: 0.4, green: 0.6, blue: 0.9), Color(red: 0.3, green: 0.5, blue: 0.8)],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
                                 )
-                            )
-                            .cornerRadius(25)
-                            .shadow(color: Color(red: 0.4, green: 0.6, blue: 0.9).opacity(0.4), radius: 15, x: 0, y: 8)
+                                .cornerRadius(25)
+                                .shadow(color: Color(red: 0.4, green: 0.6, blue: 0.9).opacity(0.4), radius: 15, x: 0, y: 8)
+                            }
+                            .padding(.horizontal, 30)
+                            .padding(.bottom, 30)
                         }
-                        .padding(.horizontal, 30)
-                        .padding(.bottom, 30)
                     }
                 }
                 .padding(.top, 30) // added to push content below the settings icon

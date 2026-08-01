@@ -4,6 +4,12 @@ import UIKit
 
 class HealthQueryManager: ObservableObject {
     let healthStore = HKHealthStore()
+    @Published var isSyncing = false
+    private var isCancelled = false
+    
+    func cancelSync() {
+        isCancelled = true
+    }
     
     // Persistent anchors storage
     private func getAnchor(for type: String) -> HKQueryAnchor? {
@@ -85,6 +91,7 @@ class HealthQueryManager: ObservableObject {
         var hasMoreData = true
         
         while hasMoreData {
+            if isCancelled { break }
             let (fetchedSamples, newAnchor) = await withCheckedContinuation { continuation in
                 let query = HKAnchoredObjectQuery(type: sampleType, predicate: nil, anchor: anchor, limit: limit) { (query, samples, deletedObjects, returnedAnchor, error) in
                     continuation.resume(returning: (samples, returnedAnchor))
@@ -136,11 +143,26 @@ class HealthQueryManager: ObservableObject {
         }
         
         DataDonorLogger.shared.log("Starting health data extraction loop.", level: .info)
+        
+        await MainActor.run {
+            self.isSyncing = true
+            self.isCancelled = false
+        }
+        defer {
+            DispatchQueue.main.async {
+                self.isSyncing = false
+            }
+        }
+        
         let allQuantities = getAllSupportedQuantityTypes().compactMap { HKObjectType.quantityType(forIdentifier: $0) }
         let allCategories = getAllSupportedCategoryTypes().compactMap { HKObjectType.categoryType(forIdentifier: $0) }
         let allTypes: [HKSampleType] = allQuantities + allCategories
         
         for sampleType in allTypes {
+            if isCancelled {
+                DataDonorLogger.shared.log("Sync was cancelled by user.", level: .info)
+                break
+            }
             await exhaustQuery(for: sampleType, syncEngine: syncEngine, serverURL: url, apiKey: apiKey)
         }
         DataDonorLogger.shared.log("Completed health data extraction loop.", level: .info)
