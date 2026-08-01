@@ -190,6 +190,9 @@ struct ContentView: View {
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                serverDiscoveryManager.startDiscovery()
+            }
         }
         .preferredColorScheme(.dark)
     }
