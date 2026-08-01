@@ -91,24 +91,24 @@ class DataDonorLogger {
         }
     }
     
-    func readAllLogs() -> [String] {
-        // Run synchronously on the queue to ensure all pending writes finish
-        return logQueue.sync {
-            var allLines: [String] = []
-            do {
-                let files = try FileManager.default.contentsOfDirectory(at: self.logsDirectory, includingPropertiesForKeys: [.creationDateKey])
-                // Sort files chronologically by filename (which includes the date)
-                let sortedFiles = files.filter { $0.pathExtension == "txt" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
-                
-                for file in sortedFiles {
-                    if let content = try? String(contentsOf: file, encoding: .utf8) {
-                        allLines.append(contentsOf: content.components(separatedBy: .newlines).filter { !$0.isEmpty })
+    func readAllLogs() async -> [String] {
+        return await withCheckedContinuation { continuation in
+            logQueue.async {
+                var allLines: [String] = []
+                do {
+                    let files = try FileManager.default.contentsOfDirectory(at: self.logsDirectory, includingPropertiesForKeys: [.creationDateKey])
+                    let sortedFiles = files.filter { $0.pathExtension == "txt" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+                    
+                    for file in sortedFiles {
+                        if let content = try? String(contentsOf: file, encoding: .utf8) {
+                            allLines.append(contentsOf: content.components(separatedBy: .newlines).filter { !$0.isEmpty })
+                        }
                     }
+                } catch {
+                    print("Failed to read logs: \(error)")
                 }
-            } catch {
-                print("Failed to read logs: \(error)")
+                continuation.resume(returning: allLines)
             }
-            return allLines
         }
     }
 }

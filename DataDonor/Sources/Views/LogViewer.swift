@@ -71,17 +71,18 @@ struct LogViewer: View {
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, prompt: "Search logs...")
         .onAppear {
-            loadLogs()
-            
-            // Generate dummy logs for demonstration if empty
-            if entries.isEmpty {
-                DataDonorLogger.shared.log("Initialized DataDonorLogger", level: .info)
-                DataDonorLogger.shared.log("Checking HealthKit permissions...", level: .debug)
-                DataDonorLogger.shared.log("Waiting for network connection.", level: .warn)
+            Task {
+                await loadLogs()
                 
-                // Allow time for async file writing
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    loadLogs()
+                // Generate dummy logs for demonstration if empty
+                if entries.isEmpty {
+                    DataDonorLogger.shared.log("Initialized DataDonorLogger", level: .info)
+                    DataDonorLogger.shared.log("Checking HealthKit permissions...", level: .debug)
+                    DataDonorLogger.shared.log("Waiting for network connection.", level: .warn)
+                    
+                    // Allow time for async file writing
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    await loadLogs()
                 }
             }
         }
@@ -99,8 +100,8 @@ struct LogViewer: View {
         }
     }
     
-    private func loadLogs() {
-        let lines = DataDonorLogger.shared.readAllLogs()
+    private func loadLogs() async {
+        let lines = await DataDonorLogger.shared.readAllLogs()
         var parsed: [LogEntry] = []
         
         for line in lines {

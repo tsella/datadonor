@@ -39,7 +39,9 @@ class BackgroundSyncManager {
         
         // Execute the pipeline
         Task {
-            await healthQueryManager.performSync(syncEngine: syncEngine, networkMonitor: networkMonitor, apiKey: apiKey)
+            let customURLString = UserDefaults.standard.string(forKey: "customServerURL") ?? ""
+            let serverURL = URL(string: customURLString) // Fallback to custom if discovery isn't available in background
+            await healthQueryManager.performSync(syncEngine: syncEngine, networkMonitor: networkMonitor, serverURL: serverURL, apiKey: apiKey)
             task.setTaskCompleted(success: true)
         }
     }
