@@ -105,7 +105,12 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
             if let samples = fetchedSamples, !samples.isEmpty {
                 let dataPoints = samples.compactMap { self.mapSample($0) }
                 let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? "unknown"
-                let base64Anchor = try? NSKeyedArchiver.archivedData(withRootObject: newAnchor as Any, requiringSecureCoding: true).base64EncodedString()
+                
+                var base64Anchor: String? = nil
+                if let safeAnchor = newAnchor {
+                    base64Anchor = try? NSKeyedArchiver.archivedData(withRootObject: safeAnchor, requiringSecureCoding: true).base64EncodedString()
+                }
+                
                 let payload = HealthDataPayload(
                     deviceId: deviceId,
                     syncTimestamp: ISO8601DateFormatter().string(from: Date()),
@@ -155,6 +160,15 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
         UserDefaults.standard.synchronize()
     }
     
+    private func wipeLocalAnchorsOnly() {
+        for key in UserDefaults.standard.dictionaryRepresentation().keys {
+            if key.hasPrefix("anchor_") {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+        UserDefaults.standard.synchronize()
+    }
+    
     func performSync(syncEngine: SyncEngine, networkMonitor: NetworkMonitor, serverURL: URL?, apiKey: String) async {
         guard let url = serverURL else {
             DataDonorLogger.shared.log("Skipping sync: No server URL resolved.", level: .warn)
@@ -183,7 +197,7 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
                     self.resetAllAnchors()
                 } else {
                     DataDonorLogger.shared.log("Received server checkpoints. Overwriting local state.", level: .info)
-                    self.resetAllAnchors() // Wipe local state first
+                    self.wipeLocalAnchorsOnly() // Wipe local anchor state first, preserving sync counts
                     for (dataType, base64Str) in serverAnchors {
                         if let data = Data(base64Encoded: base64Str) {
                             UserDefaults.standard.set(data, forKey: "anchor_\(dataType)")
