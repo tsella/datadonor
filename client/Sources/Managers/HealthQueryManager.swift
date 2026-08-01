@@ -105,15 +105,19 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
             if let samples = fetchedSamples, !samples.isEmpty {
                 let dataPoints = samples.compactMap { self.mapSample($0) }
                 let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? "unknown"
+                let base64Anchor = try? NSKeyedArchiver.archivedData(withRootObject: newAnchor as Any, requiringSecureCoding: true).base64EncodedString()
                 let payload = HealthDataPayload(
                     deviceId: deviceId,
                     syncTimestamp: ISO8601DateFormatter().string(from: Date()),
-                    data: dataPoints
+                    data: dataPoints,
+                    anchors: [sampleType.identifier: base64Anchor].compactMapValues { $0 }
                 )
                 
                 do {
-                    let data = try JSONEncoder().encode(payload)
-                    try await syncEngine.sync(payload: data, serverURL: serverURL, apiKey: apiKey)
+                    let encoder = JSONEncoder()
+                    let payloadData = try encoder.encode(payload)
+                    try await syncEngine.sync(payload: payloadData, serverURL: serverURL, apiKey: apiKey)
+                    
                     self.saveAnchor(newAnchor, for: sampleType.identifier)
                     anchor = newAnchor
                     DataDonorLogger.shared.log("Synced \(samples.count) records for \(sampleType.identifier)", level: .debug)
@@ -173,10 +177,22 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
         
         let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? "unknown"
         do {
-            let serverHasData = try await syncEngine.fetchServerCheckpoint(serverURL: url, apiKey: apiKey, deviceId: deviceId)
-            if !serverHasData {
-                DataDonorLogger.shared.log("Server has no data for device. Resetting local anchors to force full resync.", level: .info)
-                self.resetAllAnchors()
+            if let serverAnchors = try await syncEngine.fetchServerCheckpoint(serverURL: url, apiKey: apiKey, deviceId: deviceId) {
+                if serverAnchors.isEmpty {
+                    DataDonorLogger.shared.log("Server has no data for device. Resetting local anchors to force full resync.", level: .info)
+                    self.resetAllAnchors()
+                } else {
+                    DataDonorLogger.shared.log("Received server checkpoints. Overwriting local state.", level: .info)
+                    self.resetAllAnchors() // Wipe local state first
+                    for (dataType, base64Str) in serverAnchors {
+                        if let data = Data(base64Encoded: base64Str) {
+                            UserDefaults.standard.set(data, forKey: "anchor_\(dataType)")
+                        }
+                    }
+                    UserDefaults.standard.synchronize()
+                }
+            } else {
+                DataDonorLogger.shared.log("Failed to fetch server checkpoints (nil response). Proceeding with local state.", level: .warn)
             }
         } catch {
             DataDonorLogger.shared.log("Failed to fetch server checkpoint: \(error)", level: .warn)

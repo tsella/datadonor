@@ -71,7 +71,7 @@ fastify.get('/api/v1/health-sync/checkpoint', async (request, reply) => {
 let dbQueue = Promise.resolve();
 
 fastify.post('/api/v1/health-sync/post', async (request, reply) => {
-    const { device_id, sync_timestamp, data } = request.body;
+    const { device_id, sync_timestamp, data, anchors } = request.body;
     
     if (!device_id || !Array.isArray(data)) {
         return reply.status(400).send({ error: 'Invalid payload schema' });
@@ -128,6 +128,22 @@ fastify.post('/api/v1/health-sync/post', async (request, reply) => {
             }
         }
         await statsStmt.finalize();
+
+        // Update Sync Checkpoints
+        if (anchors && typeof anchors === 'object') {
+            const anchorStmt = await db.prepare(`
+                INSERT INTO checkpoints (device_id, data_type, anchor)
+                VALUES (?, ?, ?)
+                ON CONFLICT(device_id, data_type)
+                DO UPDATE SET anchor = excluded.anchor, updated_at = CURRENT_TIMESTAMP
+            `);
+            for (const [dataType, anchorValue] of Object.entries(anchors)) {
+                if (anchorValue) {
+                    await anchorStmt.run(device_id, dataType, anchorValue);
+                }
+            }
+            await anchorStmt.finalize();
+        }
 
         await db.run('COMMIT');
 
