@@ -2,6 +2,7 @@ import Foundation
 import HealthKit
 import UIKit
 
+@MainActor
 class HealthQueryManager: ObservableObject {
     let healthStore = HKHealthStore()
     @Published var isSyncing = false
@@ -102,7 +103,7 @@ class HealthQueryManager: ObservableObject {
             
             if let samples = fetchedSamples, !samples.isEmpty {
                 let dataPoints = samples.compactMap { self.mapSample($0) }
-                let deviceId = await MainActor.run { UIDevice.current.identifierForVendor?.uuidString ?? "unknown" }
+                let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? "unknown"
                 let payload = HealthDataPayload(
                     deviceId: deviceId,
                     syncTimestamp: ISO8601DateFormatter().string(from: Date()),
@@ -120,14 +121,12 @@ class HealthQueryManager: ObservableObject {
                     let now = Date()
                     let shouldUpdateTimestamp = now.timeIntervalSince(self.lastUIUpdateTime) >= 5.0
                     
-                    DispatchQueue.main.async {
-                        let currentTotal = UserDefaults.standard.integer(forKey: "totalRecordsSynced")
-                        UserDefaults.standard.set(currentTotal + samples.count, forKey: "totalRecordsSynced")
-                        
-                        if shouldUpdateTimestamp {
-                            UserDefaults.standard.set(now.timeIntervalSince1970, forKey: "lastSyncTimestamp")
-                            self.lastUIUpdateTime = now
-                        }
+                    let currentTotal = UserDefaults.standard.integer(forKey: "totalRecordsSynced")
+                    UserDefaults.standard.set(currentTotal + samples.count, forKey: "totalRecordsSynced")
+                    
+                    if shouldUpdateTimestamp {
+                        UserDefaults.standard.set(now.timeIntervalSince1970, forKey: "lastSyncTimestamp")
+                        self.lastUIUpdateTime = now
                     }
                 } catch {
                     DataDonorLogger.shared.log("Failed to encode/sync \(sampleType.identifier): \(error)", level: .warn)
@@ -152,14 +151,11 @@ class HealthQueryManager: ObservableObject {
         
         DataDonorLogger.shared.log("Starting health data extraction loop.", level: .info)
         
-        await MainActor.run {
-            self.isSyncing = true
-            self.isCancelled = false
-        }
+        self.isSyncing = true
+        self.isCancelled = false
+        
         defer {
-            DispatchQueue.main.async {
-                self.isSyncing = false
-            }
+            self.isSyncing = false
         }
         
         let allQuantities = getAllSupportedQuantityTypes().compactMap { HKObjectType.quantityType(forIdentifier: $0) }
@@ -175,10 +171,8 @@ class HealthQueryManager: ObservableObject {
         }
         
         // Final timestamp update
-        DispatchQueue.main.async {
-            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "lastSyncTimestamp")
-            self.lastUIUpdateTime = Date()
-        }
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "lastSyncTimestamp")
+        self.lastUIUpdateTime = Date()
         
         DataDonorLogger.shared.log("Completed health data extraction loop.", level: .info)
     }
