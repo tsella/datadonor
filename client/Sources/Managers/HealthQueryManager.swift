@@ -6,6 +6,7 @@ class HealthQueryManager: ObservableObject {
     let healthStore = HKHealthStore()
     @Published var isSyncing = false
     private var isCancelled = false
+    private var lastUIUpdateTime: Date = .distantPast
     
     func cancelSync() {
         isCancelled = true
@@ -116,10 +117,17 @@ class HealthQueryManager: ObservableObject {
                     DataDonorLogger.shared.log("Synced \(samples.count) records for \(sampleType.identifier)", level: .debug)
                     
                     // Update stats for DashboardView
+                    let now = Date()
+                    let shouldUpdateTimestamp = now.timeIntervalSince(self.lastUIUpdateTime) >= 5.0
+                    
                     DispatchQueue.main.async {
                         let currentTotal = UserDefaults.standard.integer(forKey: "totalRecordsSynced")
                         UserDefaults.standard.set(currentTotal + samples.count, forKey: "totalRecordsSynced")
-                        UserDefaults.standard.set(Date(), forKey: "lastSyncTimestamp")
+                        
+                        if shouldUpdateTimestamp {
+                            UserDefaults.standard.set(now.timeIntervalSince1970, forKey: "lastSyncTimestamp")
+                            self.lastUIUpdateTime = now
+                        }
                     }
                 } catch {
                     DataDonorLogger.shared.log("Failed to encode/sync \(sampleType.identifier): \(error)", level: .warn)
@@ -165,6 +173,13 @@ class HealthQueryManager: ObservableObject {
             }
             await exhaustQuery(for: sampleType, syncEngine: syncEngine, serverURL: url, apiKey: apiKey)
         }
+        
+        // Final timestamp update
+        DispatchQueue.main.async {
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "lastSyncTimestamp")
+            self.lastUIUpdateTime = Date()
+        }
+        
         DataDonorLogger.shared.log("Completed health data extraction loop.", level: .info)
     }
 }
