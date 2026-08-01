@@ -17,6 +17,14 @@ DataDonor comprehensively extracts both time-series quantity samples and categor
 - **Network Path Monitoring**: Restricts data syncing to a specific Wi-Fi SSID to ensure data only transfers when connected to your secure local network.
 - **Self-Signed Certificate Trust**: Allows the use of locally signed certificates for your server backend.
 
+## API Key Configuration & QR Scanner
+To securely link your iOS client to your backend server, DataDonor uses an API Key. Instead of manually typing long alphanumeric strings on your iPhone, you can quickly scan a QR code!
+
+1. Open your terminal and navigate to the `server/` directory.
+2. Run `npm run qr` (or `node generate-qr.js`).
+3. Your server will read the `API_KEY` you defined in `server/config.json` and print a large QR code directly in your terminal.
+4. On the iOS DataDonor app, tap the QR code icon next to the API Key text field and point your camera at the terminal screen to instantly configure it!
+
 ## Server Specification
 This app requires a backend server to receive the data. See the `server_specification.md` document for the full JSON payload specifications, checkpoint syncing mechanics, and endpoint requirements.
 
