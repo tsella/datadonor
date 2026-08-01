@@ -8,4 +8,6 @@ server/logs/
 client/build/
 server/config.json
 server/data/
+!server/data/.gitkeep
 server/certs/
+!server/certs/.gitkeep
