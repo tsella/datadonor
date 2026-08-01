@@ -10,14 +10,26 @@ struct SyncDataPoint: Identifiable, Equatable {
     var density: Double = 0.8
 }
 
-enum TimeScale {
+enum TimeScale: String {
     case days, weeks, months
+}
+
+struct ServerStat: Codable {
+    let date: String
+    let type: String
+    let count: Int
+}
+struct ServerStatsResponse: Codable {
+    let stats: [ServerStat]
 }
 
 struct DashboardView: View {
     @AppStorage("totalRecordsSynced") private var totalRecordsSynced: Int = 0
     @AppStorage("lastSyncTimestamp") private var storedLastSync: Double = 0.0
     @EnvironmentObject var healthQueryManager: HealthQueryManager
+    @EnvironmentObject var serverDiscoveryManager: ServerDiscoveryManager
+    @AppStorage("apiKey") private var apiKey = ""
+    @AppStorage("customServerURL") private var customServerURL = ""
     
     @State private var timeScale: TimeScale = .days
     @State private var syncData: [SyncDataPoint] = []
@@ -147,64 +159,70 @@ struct DashboardView: View {
         .cornerRadius(28)
         .shadow(color: Color.black.opacity(0.05), radius: 25, x: 0, y: 15)
         .onAppear {
-            if syncData.isEmpty {
-                playVisualAnimation()
-            }
+            fetchDashboardStats()
         }
         .onChange(of: healthQueryManager.isSyncing) { isSyncing in
-            if isSyncing {
-                playVisualAnimation()
+            if !isSyncing {
+                // Refresh after sync finishes
+                fetchDashboardStats()
+            }
+        }
+        .onChange(of: timeScale) { _ in
+            fetchDashboardStats()
+        }
+    }
+    
+    private func fetchDashboardStats() {
+        let cacheKey = "dashboard_cache_\(timeScale.rawValue)"
+        
+        // 1. Load from cache immediately
+        if let cachedData = UserDefaults.standard.data(forKey: cacheKey),
+           let response = try? JSONDecoder().decode(ServerStatsResponse.self, from: cachedData) {
+            updateChartData(from: response.stats)
+        }
+        
+        // 2. Fetch fresh data from server
+        let serverStr = !customServerURL.isEmpty ? customServerURL : serverDiscoveryManager.resolvedURL?.absoluteString ?? ""
+        guard let serverURL = URL(string: serverStr) else { return }
+        guard let url = URL(string: "\(serverURL.absoluteString)/api/v1/health-sync/stats?timeScale=\(timeScale.rawValue)") else { return }
+        
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        if let deviceId = UIDevice.current.identifierForVendor?.uuidString {
+            request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
+        }
+        
+        Task {
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+                
+                if let decoded = try? JSONDecoder().decode(ServerStatsResponse.self, from: data) {
+                    UserDefaults.standard.set(data, forKey: cacheKey)
+                    await MainActor.run {
+                        updateChartData(from: decoded.stats)
+                    }
+                }
+            } catch {
+                print("Dashboard fetch failed: \(error)")
             }
         }
     }
     
-    func playVisualAnimation() {
-        syncData = []
-        timeScale = .days
+    private func updateChartData(from serverStats: [ServerStat]) {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
         
-        let types = ["Heart Rate", "Steps", "Sleep", "Workouts"]
-        let calendar = Calendar.current
-        let today = Date()
+        var newPoints: [SyncDataPoint] = []
+        for stat in serverStats {
+            if let date = formatter.date(from: stat.date) {
+                newPoints.append(SyncDataPoint(date: date, type: stat.type, count: stat.count))
+            }
+        }
         
-        // Stage 1: Sync Days
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            var daysData: [SyncDataPoint] = []
-            for dayOffset in (0..<7).reversed() {
-                guard let date = calendar.date(byAdding: .day, value: -dayOffset, to: today) else { continue }
-                for type in types {
-                    let maxCount = (type == "Sleep" || type == "Workouts") ? 5 : 800
-                    daysData.append(SyncDataPoint(date: date, type: type, count: Int.random(in: 1...maxCount)))
-                }
-            }
-            syncData = daysData
-            
-            // Stage 2: Sync Weeks
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                timeScale = .weeks
-                var weeksData: [SyncDataPoint] = []
-                for weekOffset in (0..<4).reversed() {
-                    guard let date = calendar.date(byAdding: .weekOfYear, value: -weekOffset, to: today) else { continue }
-                    for type in types {
-                        let maxCount = (type == "Sleep" || type == "Workouts") ? 35 : 5600
-                        weeksData.append(SyncDataPoint(date: date, type: type, count: Int.random(in: 20...maxCount)))
-                    }
-                }
-                syncData = weeksData
-                
-                // Stage 3: Sync Months
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                    timeScale = .months
-                    var monthsData: [SyncDataPoint] = []
-                    for monthOffset in (0..<6).reversed() {
-                        guard let date = calendar.date(byAdding: .month, value: -monthOffset, to: today) else { continue }
-                        for type in types {
-                            let maxCount = (type == "Sleep" || type == "Workouts") ? 150 : 24000
-                            monthsData.append(SyncDataPoint(date: date, type: type, count: Int.random(in: 100...maxCount)))
-                        }
-                    }
-                    syncData = monthsData
-                }
-            }
+        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+            self.syncData = newPoints
         }
     }
 }
