@@ -2,6 +2,7 @@ import Foundation
 
 class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTaskDelegate {
     private var session: URLSession!
+    private var ephemeralSession: URLSession!
     var backgroundCompletionHandler: (() -> Void)?
     
     // A mapping of task identifiers to their completion handlers if needed
@@ -12,6 +13,9 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
         configuration.isDiscretionary = false // Try to sync immediately when triggered
         configuration.sessionSendsLaunchEvents = true
         self.session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+        
+        let ephemeralConfig = URLSessionConfiguration.ephemeral
+        self.ephemeralSession = URLSession(configuration: ephemeralConfig, delegate: self, delegateQueue: nil)
     }
     
     // MARK: - URLSessionDelegate
@@ -82,5 +86,24 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
         DataDonorLogger.shared.log("Started background upload task for payload size: \(payload.count) bytes", level: .info)
         // Background sessions do not support async/await for upload tasks elegantly if the app suspends. 
         // We let the session delegate handle completion or we just let it fire and forget in the background.
+    }
+    
+    func fetchStats(serverURL: URL, apiKey: String, timeScale: String, deviceId: String) async throws -> Data {
+        guard var components = URLComponents(url: serverURL.appendingPathComponent("/api/v1/health-sync/stats"), resolvingAgainstBaseURL: false) else {
+            throw URLError(.badURL)
+        }
+        components.queryItems = [URLQueryItem(name: "timeScale", value: timeScale)]
+        guard let url = components.url else { throw URLError(.badURL) }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
+        
+        let (data, response) = try await ephemeralSession.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+        return data
     }
 }

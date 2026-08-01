@@ -28,6 +28,7 @@ struct DashboardView: View {
     @AppStorage("lastSyncTimestamp") private var storedLastSync: Double = 0.0
     @EnvironmentObject var healthQueryManager: HealthQueryManager
     @EnvironmentObject var serverDiscoveryManager: ServerDiscoveryManager
+    @EnvironmentObject var syncEngine: SyncEngine
     @AppStorage("apiKey") private var apiKey = ""
     @AppStorage("customServerURL") private var customServerURL = ""
     
@@ -225,17 +226,15 @@ struct DashboardView: View {
         // 2. Fetch fresh data from server
         let serverStr = !customServerURL.isEmpty ? customServerURL : serverDiscoveryManager.resolvedURL?.absoluteString ?? ""
         guard let serverURL = URL(string: serverStr) else { return }
-        guard let url = URL(string: "\(serverURL.absoluteString)/api/v1/health-sync/stats?timeScale=\(currentScale.rawValue)") else { return }
-        
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        if let deviceId = UIDevice.current.identifierForVendor?.uuidString {
-            request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
-        }
+        let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? ""
         
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+            let data = try await syncEngine.fetchStats(
+                serverURL: serverURL,
+                apiKey: apiKey,
+                timeScale: currentScale.rawValue,
+                deviceId: deviceId
+            )
             
             if let decoded = try? JSONDecoder().decode(ServerStatsResponse.self, from: data) {
                 UserDefaults.standard.set(data, forKey: cacheKey)
