@@ -14,10 +14,11 @@ enum TimeScale {
 }
 
 struct DashboardView: View {
-    @State private var syncData: [SyncDataPoint] = []
+    @AppStorage("totalRecordsSynced") private var totalRecordsSynced: Int = 0
+    @AppStorage("lastSyncTimestamp") private var storedLastSync: Double = 0.0
     @State private var timeScale: TimeScale = .days
-    @State private var isSyncing = false
-    @State private var lastSyncTimestamp: Date? = nil
+    
+    let syncData: [SyncDataPoint] = []
     
     // Custom curated pastel palette
     let chartColors: [String: Color] = [
@@ -38,19 +39,12 @@ struct DashboardView: View {
                         .foregroundColor(Color.primary.opacity(0.85))
                     
                     HStack(spacing: 6) {
-                        if isSyncing {
-                            ProgressView()
-                                .controlSize(.small)
-                                .tint(Color(red: 0.65, green: 0.5, blue: 0.9))
-                            Text("Sync in progress...")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else if let lastSync = lastSyncTimestamp {
-                            Text("Last synced: \(lastSync, style: .time)")
+                        if storedLastSync > 0 {
+                            Text("Last synced: \(Date(timeIntervalSince1970: storedLastSync), style: .time)")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         } else {
-                            Text("Waiting for sync...")
+                            Text("No records synced yet.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -60,7 +54,7 @@ struct DashboardView: View {
                 Spacer()
                 
                 // Total Count
-                Text("\(syncData.map { $0.count }.reduce(0, +))")
+                Text("\(totalRecordsSynced)")
                     .font(.headline)
                     .fontWeight(.bold)
                     .foregroundColor(Color(red: 0.65, green: 0.5, blue: 0.9))
@@ -152,79 +146,13 @@ struct DashboardView: View {
             }
             .chartLegend(.hidden)
             .frame(height: 220)
-            .animation(.spring(response: 0.6, dampingFraction: 0.8), value: syncData)
             .animation(.easeInOut, value: timeScale)
         }
         .padding(24)
         .background(.ultraThinMaterial)
         .cornerRadius(28)
         .shadow(color: Color.black.opacity(0.05), radius: 25, x: 0, y: 15)
-        .onAppear {
-            simulateSync()
-        }
     }
     
-    func simulateSync() {
-        guard !isSyncing else { return }
-        isSyncing = true
-        syncData = []
-        timeScale = .days
-        
-        let types = ["Heart Rate", "Steps", "Sleep", "Workouts"]
-        let calendar = Calendar.current
-        let today = Date()
-        
-        // Stage 1: Sync Days
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            var daysData: [SyncDataPoint] = []
-            for dayOffset in (0..<7).reversed() {
-                guard let date = calendar.date(byAdding: .day, value: -dayOffset, to: today) else { continue }
-                let hoursSynced = Double(Int.random(in: 1...24))
-                let density = hoursSynced / 24.0
-                for type in types {
-                    let maxCount = (type == "Sleep" || type == "Workouts") ? 5 : 800
-                    daysData.append(SyncDataPoint(date: date, type: type, count: Int.random(in: 1...maxCount), density: density))
-                }
-            }
-            syncData = daysData
-            
-            // Stage 2: Sync Months (24 months to show year boundaries)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                timeScale = .months
-                var monthsData: [SyncDataPoint] = []
-                for monthOffset in (0..<24).reversed() {
-                    guard let date = calendar.date(byAdding: .month, value: -monthOffset, to: today) else { continue }
-                    let daysSynced = Double(Int.random(in: 1...30))
-                    let density = daysSynced / 30.0
-                    for type in types {
-                        let maxCount = (type == "Sleep" || type == "Workouts") ? 150 : 24000
-                        monthsData.append(SyncDataPoint(date: date, type: type, count: Int.random(in: 100...maxCount), density: density))
-                    }
-                }
-                syncData = monthsData
-                
-                // Stage 3: Sync Years (5 years)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    timeScale = .years
-                    var yearsData: [SyncDataPoint] = []
-                    for yearOffset in (0..<5).reversed() {
-                        guard let date = calendar.date(byAdding: .year, value: -yearOffset, to: today) else { continue }
-                        let monthsSynced = Double(Int.random(in: 1...12))
-                        let density = monthsSynced / 12.0
-                        for type in types {
-                            let maxCount = (type == "Sleep" || type == "Workouts") ? 1800 : 288000
-                            yearsData.append(SyncDataPoint(date: date, type: type, count: Int.random(in: 1000...maxCount), density: density))
-                        }
-                    }
-                    syncData = yearsData
-                    
-                    // Finish
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        isSyncing = false
-                        lastSyncTimestamp = Date()
-                    }
-                }
-            }
-        }
-    }
+
 }

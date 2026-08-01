@@ -3,6 +3,10 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var healthStoreManager: HealthStoreManager
     @EnvironmentObject var serverDiscoveryManager: ServerDiscoveryManager
+    @EnvironmentObject var healthQueryManager: HealthQueryManager
+    @EnvironmentObject var networkMonitor: NetworkMonitor
+    @EnvironmentObject var syncEngine: SyncEngine
+    @AppStorage("apiKey") private var apiKey = ""
     
     var body: some View {
         NavigationStack {
@@ -75,30 +79,64 @@ struct ContentView: View {
                     Spacer()
                     
                     // Modern Floating Action Button
-                    Button(action: {
-                        healthStoreManager.requestAuthorization()
-                    }) {
-                        HStack {
-                            Image(systemName: "heart.fill")
-                            Text("Grant Health Access")
-                                .fontWeight(.bold)
-                        }
-                        .font(.title3)
-                        .foregroundColor(.white)
-                        .padding(.vertical, 18)
-                        .frame(maxWidth: .infinity)
-                        .background(
-                            LinearGradient(
-                                colors: [Color(red: 1.0, green: 0.65, blue: 0.75), Color(red: 0.9, green: 0.55, blue: 0.85)],
-                                startPoint: .leading,
-                                endPoint: .trailing
+                    if !healthStoreManager.isAuthorized {
+                        Button(action: {
+                            healthStoreManager.requestAuthorization()
+                        }) {
+                            HStack {
+                                Image(systemName: "heart.fill")
+                                Text("Grant Health Access")
+                                    .fontWeight(.bold)
+                            }
+                            .font(.title3)
+                            .foregroundColor(.white)
+                            .padding(.vertical, 18)
+                            .frame(maxWidth: .infinity)
+                            .background(
+                                LinearGradient(
+                                    colors: [Color(red: 1.0, green: 0.65, blue: 0.75), Color(red: 0.9, green: 0.55, blue: 0.85)],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
                             )
-                        )
-                        .cornerRadius(25)
-                        .shadow(color: Color(red: 1.0, green: 0.65, blue: 0.75).opacity(0.4), radius: 15, x: 0, y: 8)
+                            .cornerRadius(25)
+                            .shadow(color: Color(red: 1.0, green: 0.65, blue: 0.75).opacity(0.4), radius: 15, x: 0, y: 8)
+                        }
+                        .padding(.horizontal, 30)
+                        .padding(.bottom, 30)
+                    } else {
+                        Button(action: {
+                            Task {
+                                await healthQueryManager.performSync(
+                                    syncEngine: syncEngine,
+                                    networkMonitor: networkMonitor,
+                                    serverURL: serverDiscoveryManager.resolvedURL,
+                                    apiKey: apiKey
+                                )
+                            }
+                        }) {
+                            HStack {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                Text("Sync Now")
+                                    .fontWeight(.bold)
+                            }
+                            .font(.title3)
+                            .foregroundColor(.white)
+                            .padding(.vertical, 18)
+                            .frame(maxWidth: .infinity)
+                            .background(
+                                LinearGradient(
+                                    colors: [Color(red: 0.4, green: 0.6, blue: 0.9), Color(red: 0.3, green: 0.5, blue: 0.8)],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .cornerRadius(25)
+                            .shadow(color: Color(red: 0.4, green: 0.6, blue: 0.9).opacity(0.4), radius: 15, x: 0, y: 8)
+                        }
+                        .padding(.horizontal, 30)
+                        .padding(.bottom, 30)
                     }
-                    .padding(.horizontal, 30)
-                    .padding(.bottom, 30)
                 }
                 .padding(.top, 30) // added to push content below the settings icon
             }

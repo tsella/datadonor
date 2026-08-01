@@ -107,6 +107,13 @@ class HealthQueryManager: ObservableObject {
                     self.saveAnchor(newAnchor, for: sampleType.identifier)
                     anchor = newAnchor
                     DataDonorLogger.shared.log("Synced \(samples.count) records for \(sampleType.identifier)", level: .debug)
+                    
+                    // Update stats for DashboardView
+                    DispatchQueue.main.async {
+                        let currentTotal = UserDefaults.standard.integer(forKey: "totalRecordsSynced")
+                        UserDefaults.standard.set(currentTotal + samples.count, forKey: "totalRecordsSynced")
+                        UserDefaults.standard.set(Date(), forKey: "lastSyncTimestamp")
+                    }
                 } catch {
                     DataDonorLogger.shared.log("Failed to encode/sync \(sampleType.identifier): \(error)", level: .warn)
                     hasMoreData = false
