@@ -94,8 +94,9 @@ class HealthQueryManager: ObservableObject {
             
             if let samples = fetchedSamples, !samples.isEmpty {
                 let dataPoints = samples.compactMap { self.mapSample($0) }
+                let deviceId = await UIDevice.current.identifierForVendor?.uuidString ?? "unknown"
                 let payload = HealthDataPayload(
-                    deviceId: UIDevice.current.identifierForVendor?.uuidString ?? "unknown",
+                    deviceId: deviceId,
                     syncTimestamp: ISO8601DateFormatter().string(from: Date()),
                     data: dataPoints
                 )

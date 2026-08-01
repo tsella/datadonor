@@ -11,7 +11,7 @@ enum LogLevel: String, Comparable {
     }
 }
 
-class DataDonorLogger {
+final class DataDonorLogger: @unchecked Sendable {
     static let shared = DataDonorLogger()
     
     private let logQueue = DispatchQueue(label: "la.tsel.datadonor.logger")
