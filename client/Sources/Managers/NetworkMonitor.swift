@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import SystemConfiguration.CaptiveNetwork
+import NetworkExtension
 import CoreLocation
 
 class NetworkMonitor: NSObject, ObservableObject, CLLocationManagerDelegate {
@@ -10,6 +11,7 @@ class NetworkMonitor: NSObject, ObservableObject, CLLocationManagerDelegate {
     
     @Published var isConnectedToTargetSSID = false
     @Published var currentSSID: String?
+    @Published var currentSignalStrength: Double = 0.0
     
     var targetSSID: String = "" {
         didSet {
@@ -30,6 +32,7 @@ class NetworkMonitor: NSObject, ObservableObject, CLLocationManagerDelegate {
             } else {
                 DispatchQueue.main.async {
                     self.currentSSID = nil
+                    self.currentSignalStrength = 0.0
                     self.isConnectedToTargetSSID = false
                 }
             }
@@ -38,17 +41,36 @@ class NetworkMonitor: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
     
     func checkSSID() {
-        // Fetch SSID (Requires iOS 14+ capabilities and location permission)
-        // In a real app, NEHotspotNetwork.fetchCurrent should be used with the right entitlements.
-        // For this scaffold, we'll simulate the success if targetSSID is empty.
-        
-        DispatchQueue.main.async {
-            // Simulated implementation
-            self.currentSSID = "Home_WiFi" 
-            if self.targetSSID.isEmpty || self.currentSSID == self.targetSSID {
-                self.isConnectedToTargetSSID = true
-            } else {
-                self.isConnectedToTargetSSID = false
+        if #available(iOS 14.0, *) {
+            NEHotspotNetwork.fetchCurrent { [weak self] network in
+                guard let self = self else { return }
+                
+                var fetchedSSID: String? = network?.ssid
+                var fetchedStrength: Double = network?.signalStrength ?? 0.0
+                
+                #if targetEnvironment(simulator)
+                // Provide a mock on simulator because NEHotspotNetwork returns nil
+                if fetchedSSID == nil {
+                    fetchedSSID = "Simulated_WiFi"
+                    fetchedStrength = 0.85
+                }
+                #endif
+                
+                DispatchQueue.main.async {
+                    self.currentSSID = fetchedSSID
+                    self.currentSignalStrength = fetchedStrength
+                    
+                    if let ssid = fetchedSSID, !ssid.isEmpty {
+                        self.isConnectedToTargetSSID = self.targetSSID.isEmpty || ssid == self.targetSSID
+                    } else {
+                        self.isConnectedToTargetSSID = self.targetSSID.isEmpty
+                    }
+                }
+            }
+        } else {
+            // Fallback
+            DispatchQueue.main.async {
+                self.isConnectedToTargetSSID = self.targetSSID.isEmpty
             }
         }
     }
