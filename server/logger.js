@@ -9,7 +9,9 @@ const config = loadConfig();
 const logFormat = winston.format.combine(
     winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
     winston.format.printf(({ timestamp, level, message }) => {
-        return `[${timestamp}] [${level.toUpperCase()}] ${message}`;
+        // Only uppercase if it doesn't contain ANSI color codes
+        const displayLevel = level.includes('\x1B') ? level : level.toUpperCase();
+        return `[${timestamp}] [${displayLevel}] ${message}`;
     })
 );
 
