@@ -27,7 +27,8 @@ openssl req -x509 -newkey rsa:4096 -keyout certs/key.pem -out certs/cert.pem -da
 ## 3. Configuration
 Copy the provided `config.json.example` template to a new `config.json` file in the root directory:
 1. Run `cp config.json.example config.json`.
-2. Open `config.json` and change the `api_key` under `security` to a strong, random password.
+2. Open `config.json` and change the `api_key` under `security` to a strong, random password. 
+   *(Tip: You can generate a secure random key by running `openssl rand -hex 32` in your terminal)*
 3. Enter this exact API key into the Settings tab of the DataDonor iOS app.
 
 ## 4. Running the Server (PM2)
