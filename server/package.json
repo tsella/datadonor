@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "qr": "node generate-qr.js"
+    "qr": "node generate-qr.js",
+    "rebuild-stats": "node rebuild_aggregations.js"
   },
   "keywords": [],
   "author": "",
