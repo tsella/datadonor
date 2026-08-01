@@ -2,9 +2,10 @@ import SwiftUI
 
 @main
 struct DataDonorApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    
     @StateObject private var healthStoreManager = HealthStoreManager()
     @StateObject private var serverDiscoveryManager = ServerDiscoveryManager()
-    let syncEngine = SyncEngine()
     
     var body: some Scene {
         WindowGroup {

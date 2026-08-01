@@ -13,6 +13,7 @@
 		359D2E5A6ADFDFA64193D5E8 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7443C994A99D979FE01BD8AD /* SettingsView.swift */; };
 		3FE5E493BD7E9B0C8160E7F8 /* ServerDiscoveryManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DEC85DD5033F486CA48B51E /* ServerDiscoveryManager.swift */; };
 		52875443D6173D124363A3F2 /* BackgroundSyncManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44CCF4B8A6F12FBD9CEB89A7 /* BackgroundSyncManager.swift */; };
+		5BF198D188BE31C16AC20C1B /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 066CF1E26C45529B622C2102 /* AppDelegate.swift */; };
 		807618975E0B37A859F631F6 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0502AA9B461C6FB7570609 /* ContentView.swift */; };
 		8A17547229C35C18E008CA3F /* HealthStoreManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ACD28D0D80DD95A19E0A3DD /* HealthStoreManager.swift */; };
 		9DBDDD0A4BA024F7EB218507 /* SyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A65ED0883FB0D15D811CB1 /* SyncEngine.swift */; };
@@ -24,6 +25,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		066CF1E26C45529B622C2102 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		3DEC85DD5033F486CA48B51E /* ServerDiscoveryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerDiscoveryManager.swift; sourceTree = "<group>"; };
 		41C75D75B020EABE31D365A1 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
 		43AA60B52B0FE33DA4F10BEE /* HealthDataPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthDataPayload.swift; sourceTree = "<group>"; };
@@ -63,6 +65,7 @@
 		8F0F7ADB27A759B33C1F49F2 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				066CF1E26C45529B622C2102 /* AppDelegate.swift */,
 				DA0502AA9B461C6FB7570609 /* ContentView.swift */,
 				F9198FDC42B25ACCE2CD5E18 /* DataDonorApp.swift */,
 				95235B7A9539C283E4BA03D9 /* Managers */,
@@ -158,6 +161,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5BF198D188BE31C16AC20C1B /* AppDelegate.swift in Sources */,
 				52875443D6173D124363A3F2 /* BackgroundSyncManager.swift in Sources */,
 				807618975E0B37A859F631F6 /* ContentView.swift in Sources */,
 				27946C1DB9AB0B761B421FFF /* DashboardView.swift in Sources */,
