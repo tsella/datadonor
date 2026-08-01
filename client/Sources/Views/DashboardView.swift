@@ -20,7 +20,6 @@ struct ServerStatsResponse: Codable {
 }
 
 struct DashboardView: View {
-    @AppStorage("totalRecordsSynced") private var totalRecordsSynced: Int = 0
     @AppStorage("lastSyncTimestamp") private var storedLastSync: Double = 0.0
     @EnvironmentObject var healthQueryManager: HealthQueryManager
     @EnvironmentObject var serverDiscoveryManager: ServerDiscoveryManager
@@ -75,7 +74,7 @@ struct DashboardView: View {
                 Spacer()
                 
                 // Total Count
-                Text("\(totalRecordsSynced)")
+                Text("\(healthQueryManager.totalRecordsSynced)")
                     .font(.headline)
                     .fontWeight(.bold)
                     .foregroundColor(Color.white)
@@ -151,10 +150,10 @@ struct DashboardView: View {
         .cornerRadius(28)
         .shadow(color: Color.black.opacity(0.05), radius: 25, x: 0, y: 15)
         .onAppear {
-            lastRefreshCount = totalRecordsSynced
+            lastRefreshCount = healthQueryManager.totalRecordsSynced
             refreshData()
         }
-        .onChange(of: totalRecordsSynced) { newTotal in
+        .onChange(of: healthQueryManager.totalRecordsSynced) { newTotal in
             if healthQueryManager.isSyncing {
                 if newTotal - lastRefreshCount >= 5000 {
                     lastRefreshCount = newTotal
@@ -165,7 +164,7 @@ struct DashboardView: View {
         .onChange(of: healthQueryManager.isSyncing) { isSyncing in
             if !isSyncing {
                 // Refresh after sync finishes
-                lastRefreshCount = totalRecordsSynced
+                lastRefreshCount = healthQueryManager.totalRecordsSynced
                 refreshData()
             }
         }

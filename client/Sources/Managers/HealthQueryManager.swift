@@ -6,6 +6,7 @@ import UIKit
 final class HealthQueryManager: ObservableObject, @unchecked Sendable {
     let healthStore = HKHealthStore()
     @Published var isSyncing = false
+    @Published var totalRecordsSynced: Int = UserDefaults.standard.integer(forKey: "totalRecordsSynced")
     private var isCancelled = false
     private var lastUIUpdateTime: Date = .distantPast
     
@@ -121,8 +122,8 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
                     let now = Date()
                     let shouldUpdateTimestamp = now.timeIntervalSince(self.lastUIUpdateTime) >= 5.0
                     
-                    let currentTotal = UserDefaults.standard.integer(forKey: "totalRecordsSynced")
-                    UserDefaults.standard.set(currentTotal + samples.count, forKey: "totalRecordsSynced")
+                    self.totalRecordsSynced += samples.count
+                    UserDefaults.standard.set(self.totalRecordsSynced, forKey: "totalRecordsSynced")
                     
                     if shouldUpdateTimestamp {
                         UserDefaults.standard.set(now.timeIntervalSince1970, forKey: "lastSyncTimestamp")
@@ -146,6 +147,7 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
         }
         UserDefaults.standard.set(0.0, forKey: "lastSyncTimestamp")
         UserDefaults.standard.set(0, forKey: "totalRecordsSynced")
+        self.totalRecordsSynced = 0
         UserDefaults.standard.synchronize()
     }
     
