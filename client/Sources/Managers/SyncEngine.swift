@@ -32,9 +32,22 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
     }
     
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        DataDonorLogger.shared.log("SyncEngine: All background events finished.", level: .info)
         DispatchQueue.main.async {
             self.backgroundCompletionHandler?()
             self.backgroundCompletionHandler = nil
+        }
+    }
+    
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error = error {
+            DataDonorLogger.shared.log("SyncEngine: Task \(task.taskIdentifier) failed with error: \(error.localizedDescription)", level: .error)
+        } else if let response = task.response as? HTTPURLResponse {
+            if response.statusCode == 200 || response.statusCode == 201 {
+                DataDonorLogger.shared.log("SyncEngine: Task \(task.taskIdentifier) completed successfully (Status: \(response.statusCode))", level: .info)
+            } else {
+                DataDonorLogger.shared.log("SyncEngine: Task \(task.taskIdentifier) returned unexpected status code: \(response.statusCode)", level: .warn)
+            }
         }
     }
     
