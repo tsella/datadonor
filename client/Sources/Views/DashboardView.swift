@@ -33,6 +33,7 @@ struct DashboardView: View {
     
     @State private var timeScale: TimeScale = .days
     @State private var syncData: [SyncDataPoint] = []
+    @State private var animationTask: Task<Void, Never>?
     
     // Custom curated pastel palette
     let chartColors: [String: Color] = [
@@ -86,18 +87,30 @@ struct DashboardView: View {
                     .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
             }
             
-            // Interactive Legend
-            HStack(spacing: 12) {
-                ForEach(["Heart Rate", "Steps", "Sleep", "Workouts"], id: \.self) { type in
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(chartColors[type] ?? .gray)
-                            .frame(width: 8, height: 8)
-                        Text(type)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.secondary)
+            // Interactive Legend & Controls
+            HStack {
+                HStack(spacing: 12) {
+                    ForEach(["Heart Rate", "Steps", "Sleep", "Workouts"], id: \.self) { type in
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(chartColors[type] ?? .gray)
+                                .frame(width: 8, height: 8)
+                            Text(type)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
+                
+                Spacer()
+                
+                Picker("", selection: $timeScale) {
+                    Text("D").tag(TimeScale.days)
+                    Text("W").tag(TimeScale.weeks)
+                    Text("M").tag(TimeScale.months)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 120)
             }
             .padding(.top, -5)
             
@@ -159,37 +172,60 @@ struct DashboardView: View {
         .cornerRadius(28)
         .shadow(color: Color.black.opacity(0.05), radius: 25, x: 0, y: 15)
         .onAppear {
-            fetchDashboardStats()
+            playRealDataAnimation()
         }
         .onChange(of: healthQueryManager.isSyncing) { isSyncing in
             if !isSyncing {
                 // Refresh after sync finishes
-                fetchDashboardStats()
+                playRealDataAnimation()
             }
         }
         .onChange(of: timeScale) { _ in
-            fetchDashboardStats()
+            Task {
+                await fetchDashboardStats()
+            }
         }
         .onChange(of: serverDiscoveryManager.resolvedURL) { newURL in
             if newURL != nil {
-                fetchDashboardStats()
+                playRealDataAnimation()
             }
         }
     }
     
-    private func fetchDashboardStats() {
-        let cacheKey = "dashboard_cache_\(timeScale.rawValue)"
+    private func playRealDataAnimation() {
+        animationTask?.cancel()
+        animationTask = Task {
+            await MainActor.run { timeScale = .days }
+            await fetchDashboardStats()
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            
+            guard !Task.isCancelled else { return }
+            await MainActor.run { timeScale = .weeks }
+            await fetchDashboardStats()
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            
+            guard !Task.isCancelled else { return }
+            await MainActor.run { timeScale = .months }
+            await fetchDashboardStats()
+        }
+    }
+    
+    private func fetchDashboardStats() async {
+        let currentScale = timeScale
+        let cacheKey = "dashboard_cache_\(currentScale.rawValue)"
         
         // 1. Load from cache immediately
         if let cachedData = UserDefaults.standard.data(forKey: cacheKey),
            let response = try? JSONDecoder().decode(ServerStatsResponse.self, from: cachedData) {
-            updateChartData(from: response.stats)
+            await MainActor.run {
+                if timeScale == currentScale { updateChartData(from: response.stats) }
+            }
         }
         
         // 2. Fetch fresh data from server
         let serverStr = !customServerURL.isEmpty ? customServerURL : serverDiscoveryManager.resolvedURL?.absoluteString ?? ""
         guard let serverURL = URL(string: serverStr) else { return }
-        guard let url = URL(string: "\(serverURL.absoluteString)/api/v1/health-sync/stats?timeScale=\(timeScale.rawValue)") else { return }
+        guard let url = URL(string: "\(serverURL.absoluteString)/api/v1/health-sync/stats?timeScale=\(currentScale.rawValue)") else { return }
         
         var request = URLRequest(url: url)
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -197,20 +233,18 @@ struct DashboardView: View {
             request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
         }
         
-        Task {
-            do {
-                let (data, response) = try await URLSession.shared.data(for: request)
-                guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
-                
-                if let decoded = try? JSONDecoder().decode(ServerStatsResponse.self, from: data) {
-                    UserDefaults.standard.set(data, forKey: cacheKey)
-                    await MainActor.run {
-                        updateChartData(from: decoded.stats)
-                    }
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+            
+            if let decoded = try? JSONDecoder().decode(ServerStatsResponse.self, from: data) {
+                UserDefaults.standard.set(data, forKey: cacheKey)
+                await MainActor.run {
+                    if timeScale == currentScale { updateChartData(from: decoded.stats) }
                 }
-            } catch {
-                print("Dashboard fetch failed: \(error)")
             }
+        } catch {
+            print("Dashboard fetch failed: \(error)")
         }
     }
     
