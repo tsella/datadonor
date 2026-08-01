@@ -9,16 +9,31 @@ struct SettingsView: View {
     @EnvironmentObject private var serverDiscoveryManager: ServerDiscoveryManager
     
     @AppStorage("isApiKeyVerified") private var isApiKeyVerified = false
+    @State private var isShowingQRScanner = false
     
     var body: some View {
         Form {
             Section(header: Text("Authentication"), footer: Text("The API key shared with your local server.")) {
                 if isApiKeyVerified {
-                    SecureField("API Key", text: $apiKey)
+                    HStack {
+                        SecureField("API Key", text: $apiKey)
+                        Spacer()
+                        Button(action: { isShowingQRScanner = true }) {
+                            Image(systemName: "qrcode.viewfinder")
+                                .foregroundColor(.blue)
+                        }
+                    }
                 } else {
-                    TextField("API Key", text: $apiKey)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
+                    HStack {
+                        TextField("API Key", text: $apiKey)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled(true)
+                        Spacer()
+                        Button(action: { isShowingQRScanner = true }) {
+                            Image(systemName: "qrcode.viewfinder")
+                                .foregroundColor(.blue)
+                        }
+                    }
                 }
             }
             
@@ -90,6 +105,13 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $isShowingQRScanner) {
+            QRScannerView { scannedKey in
+                apiKey = scannedKey
+                isShowingQRScanner = false
+            }
+            .ignoresSafeArea()
+        }
     }
 }
 
