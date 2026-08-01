@@ -12,11 +12,11 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                // True full-screen pastel gradient background
+                // Deep, vibrant dark mode gradient
                 LinearGradient(
                     gradient: Gradient(colors: [
-                        Color(red: 0.96, green: 0.93, blue: 1.0), // Soft Lavender
-                        Color(red: 1.0, green: 0.95, blue: 0.96)  // Pale Pink
+                        Color(red: 0.05, green: 0.03, blue: 0.12), // Deep Violet
+                        Color(red: 0.12, green: 0.05, blue: 0.25)  // Rich Indigo
                     ]),
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
@@ -191,5 +191,6 @@ struct ContentView: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
         }
+        .preferredColorScheme(.dark)
     }
 }

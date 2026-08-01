@@ -31,12 +31,12 @@ struct DashboardView: View {
     @State private var syncData: [SyncDataPoint] = []
     @State private var fetchTask: Task<Void, Never>?
     
-    // Custom curated pastel palette
+    // Vibrant Neon Palette for Dark Mode
     let chartColors: [String: Color] = [
-        "Heart Rate": Color(red: 1.0, green: 0.7, blue: 0.75), // Pastel Pink
-        "Steps": Color(red: 0.65, green: 0.8, blue: 1.0),      // Pastel Blue
-        "Sleep": Color(red: 0.8, green: 0.75, blue: 0.95),     // Pastel Purple
-        "Workouts": Color(red: 0.65, green: 0.9, blue: 0.75)   // Pastel Green
+        "Heart Rate": Color(red: 1.0, green: 0.15, blue: 0.35), // Neon Pink/Crimson
+        "Steps": Color(red: 0.0, green: 0.8, blue: 1.0),       // Electric Cyan
+        "Sleep": Color(red: 0.6, green: 0.2, blue: 1.0),       // Deep Neon Purple
+        "Workouts": Color(red: 0.1, green: 0.95, blue: 0.4)    // Neon Green
     ]
     
     var body: some View {
@@ -55,7 +55,7 @@ struct DashboardView: View {
                         if healthQueryManager.isSyncing {
                             ProgressView()
                                 .controlSize(.small)
-                                .tint(Color(red: 0.65, green: 0.5, blue: 0.9))
+                                .tint(Color.white.opacity(0.8))
                             Text("Sync in progress...")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
@@ -77,10 +77,16 @@ struct DashboardView: View {
                 Text("\(totalRecordsSynced)")
                     .font(.headline)
                     .fontWeight(.bold)
-                    .foregroundColor(Color(red: 0.65, green: 0.5, blue: 0.9))
+                    .foregroundColor(Color.white)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
-                    .background(Color.white.opacity(0.7))
+                    .background(
+                        LinearGradient(
+                            colors: [Color(red: 0.4, green: 0.2, blue: 0.8), Color(red: 0.6, green: 0.3, blue: 0.9)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
                     .clipShape(Capsule())
                     .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
                     .lineLimit(1)
