@@ -30,6 +30,7 @@ struct DashboardView: View {
     
     @State private var syncData: [SyncDataPoint] = []
     @State private var fetchTask: Task<Void, Never>?
+    @State private var lastRefreshCount: Int = 0
     
     // Vibrant Neon Palette for Dark Mode
     let chartColors: [String: Color] = [
@@ -150,11 +151,21 @@ struct DashboardView: View {
         .cornerRadius(28)
         .shadow(color: Color.black.opacity(0.05), radius: 25, x: 0, y: 15)
         .onAppear {
+            lastRefreshCount = totalRecordsSynced
             refreshData()
+        }
+        .onChange(of: totalRecordsSynced) { newTotal in
+            if healthQueryManager.isSyncing {
+                if newTotal - lastRefreshCount >= 5000 {
+                    lastRefreshCount = newTotal
+                    refreshData()
+                }
+            }
         }
         .onChange(of: healthQueryManager.isSyncing) { isSyncing in
             if !isSyncing {
                 // Refresh after sync finishes
+                lastRefreshCount = totalRecordsSynced
                 refreshData()
             }
         }
