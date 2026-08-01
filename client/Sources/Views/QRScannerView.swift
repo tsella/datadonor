@@ -4,44 +4,40 @@ import AVFoundation
 struct QRScannerView: UIViewControllerRepresentable {
     var onResult: (String) -> Void
     
-    class Coordinator: NSObject, AVCaptureMetadataOutputObjectsDelegate {
-        var parent: QRScannerView
-        
-        init(parent: QRScannerView) {
-            self.parent = parent
-        }
-        
-        func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
-            if let metadataObject = metadataObjects.first {
-                guard let readableObject = metadataObject as? AVMetadataMachineReadableCodeObject else { return }
-                guard let stringValue = readableObject.stringValue else { return }
-                AudioServicesPlaySystemSound(SystemSoundID(kSystemSoundID_Vibrate))
-                parent.onResult(stringValue)
-            }
-        }
+    func makeUIViewController(context: Context) -> ScannerViewController {
+        let viewController = ScannerViewController()
+        viewController.onResult = onResult
+        return viewController
     }
     
-    func makeCoordinator() -> Coordinator {
-        return Coordinator(parent: self)
+    func updateUIViewController(_ uiViewController: ScannerViewController, context: Context) {
     }
+}
+
+class ScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
+    var captureSession: AVCaptureSession!
+    var previewLayer: AVCaptureVideoPreviewLayer!
+    var onResult: ((String) -> Void)?
     
-    func makeUIViewController(context: Context) -> UIViewController {
-        let viewController = UIViewController()
-        let captureSession = AVCaptureSession()
+    override func viewDidLoad() {
+        super.viewDidLoad()
         
-        guard let videoCaptureDevice = AVCaptureDevice.default(for: .video) else { return viewController }
+        view.backgroundColor = UIColor.black
+        captureSession = AVCaptureSession()
+        
+        guard let videoCaptureDevice = AVCaptureDevice.default(for: .video) else { return }
         let videoInput: AVCaptureDeviceInput
         
         do {
             videoInput = try AVCaptureDeviceInput(device: videoCaptureDevice)
         } catch {
-            return viewController
+            return
         }
         
         if (captureSession.canAddInput(videoInput)) {
             captureSession.addInput(videoInput)
         } else {
-            return viewController
+            return
         }
         
         let metadataOutput = AVCaptureMetadataOutput()
@@ -49,24 +45,53 @@ struct QRScannerView: UIViewControllerRepresentable {
         if (captureSession.canAddOutput(metadataOutput)) {
             captureSession.addOutput(metadataOutput)
             
-            metadataOutput.setMetadataObjectsDelegate(context.coordinator, queue: DispatchQueue.main)
+            metadataOutput.setMetadataObjectsDelegate(self, queue: DispatchQueue.main)
             metadataOutput.metadataObjectTypes = [.qr]
         } else {
-            return viewController
+            return
         }
         
-        let previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
-        previewLayer.frame = viewController.view.layer.bounds
+        previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
+        previewLayer.frame = view.layer.bounds
         previewLayer.videoGravity = .resizeAspectFill
-        viewController.view.layer.addSublayer(previewLayer)
+        view.layer.addSublayer(previewLayer)
         
         DispatchQueue.global(qos: .background).async {
-            captureSession.startRunning()
+            self.captureSession.startRunning()
         }
-        
-        return viewController
     }
     
-    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        
+        if captureSession?.isRunning == false {
+            DispatchQueue.global(qos: .background).async {
+                self.captureSession.startRunning()
+            }
+        }
+    }
+    
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        
+        if captureSession?.isRunning == true {
+            captureSession.stopRunning()
+        }
+    }
+    
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        previewLayer?.frame = view.bounds
+    }
+    
+    func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
+        captureSession.stopRunning()
+        
+        if let metadataObject = metadataObjects.first {
+            guard let readableObject = metadataObject as? AVMetadataMachineReadableCodeObject else { return }
+            guard let stringValue = readableObject.stringValue else { return }
+            AudioServicesPlaySystemSound(SystemSoundID(kSystemSoundID_Vibrate))
+            onResult?(stringValue)
+        }
     }
 }
