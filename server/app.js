@@ -147,21 +147,6 @@ fastify.post('/api/v1/health-sync/post', async (request, reply) => {
     });
 });
 
-// Endpoint: Checkpoint status to determine if the server has ANY data for this device
-fastify.get('/api/v1/health-sync/checkpoint', async (request, reply) => {
-    const deviceId = request.headers['x-device-id'] || request.query.deviceId;
-    if (!deviceId) return reply.code(400).send({ error: 'Device ID required' });
-    
-    const db = await getDb();
-    try {
-        const row = await db.get('SELECT COUNT(*) as count FROM health_data WHERE device_id = ?', deviceId);
-        return { hasData: row.count > 0 };
-    } catch (err) {
-        request.log.error(err);
-        return reply.code(500).send({ error: 'Database error' });
-    }
-});
-
 // Endpoint: D. Analytics Stats
 fastify.get('/api/v1/health-sync/stats', async (request, reply) => {
     const deviceId = request.headers['x-device-id'];
