@@ -17,8 +17,33 @@ struct DashboardView: View {
     @AppStorage("totalRecordsSynced") private var totalRecordsSynced: Int = 0
     @AppStorage("lastSyncTimestamp") private var storedLastSync: Double = 0.0
     @State private var timeScale: TimeScale = .days
+    @State private var phase: Double = 0.0
     
-    let syncData: [SyncDataPoint] = []
+    let timer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
+    
+    var syncData: [SyncDataPoint] {
+        let calendar = Calendar.current
+        let today = Date()
+        var points: [SyncDataPoint] = []
+        let types = ["Heart Rate", "Steps", "Sleep", "Workouts"]
+        
+        for i in 0..<7 {
+            let date = calendar.date(byAdding: .day, value: -6 + i, to: today)!
+            for (typeIndex, type) in types.enumerated() {
+                // Base height
+                let base = Double(i * 10 + typeIndex * 15 + 20)
+                
+                // Create a wave effect based on phase, offset by the bar's position
+                let offset = Double(i) * 0.5 + Double(typeIndex) * 0.2
+                
+                // Heartbeat pulse math: sharp peaks, flat troughs
+                let wave = pow(sin(phase - offset), 4) * 50
+                
+                points.append(SyncDataPoint(date: date, type: type, count: Int(base + wave), density: 0.8))
+            }
+        }
+        return points
+    }
     
     // Custom curated pastel palette
     let chartColors: [String: Color] = [
@@ -145,13 +170,19 @@ struct DashboardView: View {
                 }
             }
             .chartLegend(.hidden)
+            .chartYScale(domain: 0...150)
             .frame(height: 220)
-            .animation(.easeInOut, value: timeScale)
+            .animation(.interactiveSpring(response: 0.3, dampingFraction: 0.8), value: phase)
         }
         .padding(24)
         .background(.ultraThinMaterial)
         .cornerRadius(28)
         .shadow(color: Color.black.opacity(0.05), radius: 25, x: 0, y: 15)
+        .onReceive(timer) { _ in
+            withAnimation {
+                phase += 0.15
+            }
+        }
     }
     
 
