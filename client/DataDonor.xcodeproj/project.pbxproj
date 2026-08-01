@@ -18,6 +18,7 @@
 		8A17547229C35C18E008CA3F /* HealthStoreManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ACD28D0D80DD95A19E0A3DD /* HealthStoreManager.swift */; };
 		9DBDDD0A4BA024F7EB218507 /* SyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A65ED0883FB0D15D811CB1 /* SyncEngine.swift */; };
 		B7F0DB00B82B875BC95F4A74 /* HealthQueryManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDC2BE44061E01864982FC3E /* HealthQueryManager.swift */; };
+		CBFADF0A2575755766133D24 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EEDABAD12BF5B43F630B560A /* Assets.xcassets */; };
 		DC18FB43A4574BBF3EE79E0C /* HealthDataPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43AA60B52B0FE33DA4F10BEE /* HealthDataPayload.swift */; };
 		F0228F882331253AC6191A19 /* DataDonorLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = B871FF1D06DC360984B8B117 /* DataDonorLogger.swift */; };
 		F3C2BB7BAAC6F69B8530607E /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 888D8220FCE0DF54E65F5D58 /* NotificationManager.swift */; };
@@ -40,6 +41,7 @@
 		D3CD2AC04AC6DF5A5CADC915 /* NetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkMonitor.swift; sourceTree = "<group>"; };
 		DA0502AA9B461C6FB7570609 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		DDC2BE44061E01864982FC3E /* HealthQueryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthQueryManager.swift; sourceTree = "<group>"; };
+		EEDABAD12BF5B43F630B560A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		F9198FDC42B25ACCE2CD5E18 /* DataDonorApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataDonorApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -66,6 +68,7 @@
 			isa = PBXGroup;
 			children = (
 				066CF1E26C45529B622C2102 /* AppDelegate.swift */,
+				EEDABAD12BF5B43F630B560A /* Assets.xcassets */,
 				DA0502AA9B461C6FB7570609 /* ContentView.swift */,
 				F9198FDC42B25ACCE2CD5E18 /* DataDonorApp.swift */,
 				95235B7A9539C283E4BA03D9 /* Managers */,
@@ -114,6 +117,7 @@
 			buildConfigurationList = D4D502DE67C703ECC3CA9408 /* Build configuration list for PBXNativeTarget "DataDonor" */;
 			buildPhases = (
 				D24C153261409EA518F2949D /* Sources */,
+				4A410CEA96EA60684A8AA607 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -155,6 +159,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		4A410CEA96EA60684A8AA607 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CBFADF0A2575755766133D24 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		D24C153261409EA518F2949D /* Sources */ = {

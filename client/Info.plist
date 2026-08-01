@@ -18,6 +18,10 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>DataDonor needs access to read your health data to securely sync it to your personal server.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>DataDonor needs access to write your health data to securely sync it to your personal server.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 </dict>

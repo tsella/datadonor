@@ -3,3 +3,6 @@
 xcuserdata/
 project.xcworkspace/
 *.xcresult
+server/node_modules/
+server/logs/
+client/build/
