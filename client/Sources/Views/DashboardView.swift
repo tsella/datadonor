@@ -53,6 +53,8 @@ struct DashboardView: View {
                         .font(.title3)
                         .fontWeight(.bold)
                         .foregroundColor(Color.primary.opacity(0.85))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                     
                     HStack(spacing: 6) {
                         if healthQueryManager.isSyncing {
@@ -86,10 +88,19 @@ struct DashboardView: View {
                     .background(Color.white.opacity(0.7))
                     .clipShape(Capsule())
                     .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
             
             // Interactive Legend & Controls
-            HStack {
+            VStack(alignment: .leading, spacing: 14) {
+                Picker("", selection: $timeScale) {
+                    Text("Days").tag(TimeScale.days)
+                    Text("Weeks").tag(TimeScale.weeks)
+                    Text("Months").tag(TimeScale.months)
+                }
+                .pickerStyle(.segmented)
+                
                 HStack(spacing: 12) {
                     ForEach(["Heart Rate", "Steps", "Sleep", "Workouts"], id: \.self) { type in
                         HStack(spacing: 4) {
@@ -99,19 +110,10 @@ struct DashboardView: View {
                             Text(type)
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundColor(.secondary)
+                                .lineLimit(1)
                         }
                     }
                 }
-                
-                Spacer()
-                
-                Picker("", selection: $timeScale) {
-                    Text("D").tag(TimeScale.days)
-                    Text("W").tag(TimeScale.weeks)
-                    Text("M").tag(TimeScale.months)
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 120)
             }
             .padding(.top, -5)
             

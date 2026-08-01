@@ -23,7 +23,8 @@ struct ContentView: View {
                 )
                 .ignoresSafeArea()
                 
-                VStack(spacing: 25) {
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 25) {
                     // Header Logo & Title
                     VStack(spacing: 10) {
                         Image("Logo")
@@ -36,7 +37,7 @@ struct ContentView: View {
                             .font(.system(size: 32, weight: .heavy, design: .rounded))
                             .foregroundColor(Color.primary.opacity(0.85))
                     }
-                    .padding(.top, 20)
+                    .padding(.top, 10)
                     
                     // Server Connection Glassmorphism Card
                     VStack(spacing: 12) {
@@ -167,7 +168,8 @@ struct ContentView: View {
                         }
                     }
                 }
-                .padding(.top, 30) // added to push content below the settings icon
+                    }
+                }
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
@@ -185,4 +187,3 @@ struct ContentView: View {
             }
         }
     }
-}
