@@ -14,7 +14,7 @@
     "sqlite3": "^5.1.7",
     "sqlite": "^5.1.1",
     "bonjour-service": "^1.4.4",
-    "express": "^5.2.1",
+    "fastify": "^4.26.2",
     "winston": "^3.19.0",
     "winston-daily-rotate-file": "^5.0.0"
   }
