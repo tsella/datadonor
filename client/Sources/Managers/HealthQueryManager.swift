@@ -49,6 +49,7 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
         case .dietaryWater: return HKUnit.literUnit(with: .milli)
         default:
             if #available(iOS 16.0, *), identifier == .appleSleepingWristTemperature { return HKUnit.degreeCelsius() }
+            if #available(iOS 17.0, *), identifier == .timeInDaylight { return HKUnit.minute() }
             return HKUnit.count()
         }
     }
