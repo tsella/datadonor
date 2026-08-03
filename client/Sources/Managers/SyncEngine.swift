@@ -57,7 +57,7 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
     
     // MARK: - Async Stubs & Sync
     
-    func fetchServerCheckpoint(serverURL: URL, apiKey: String, deviceId: String) async throws -> [String: String]? {
+    func fetchServerCheckpoint(serverURL: URL, apiKey: String, deviceId: String) async throws -> (checkpoints: [String: String], totalRecords: Int)? {
         let url = serverURL.appendingPathComponent("/api/v1/health-sync/checkpoint")
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -69,7 +69,8 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let checkpoints = json["checkpoints"] as? [String: String] {
-                return checkpoints
+                let totalRecords = json["total_records"] as? Int ?? 0
+                return (checkpoints: checkpoints, totalRecords: totalRecords)
             }
         }
         return nil

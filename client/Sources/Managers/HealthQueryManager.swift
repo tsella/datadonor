@@ -220,7 +220,15 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
         
         let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? "unknown"
         do {
-            if let serverAnchors = try await syncEngine.fetchServerCheckpoint(serverURL: url, apiKey: apiKey, deviceId: deviceId) {
+            if let checkpointData = try await syncEngine.fetchServerCheckpoint(serverURL: url, apiKey: apiKey, deviceId: deviceId) {
+                let serverAnchors = checkpointData.checkpoints
+                
+                // Align local record count with server's actual count
+                DispatchQueue.main.async {
+                    self.totalRecordsSynced = checkpointData.totalRecords
+                }
+                UserDefaults.standard.set(checkpointData.totalRecords, forKey: "totalRecordsSynced")
+                
                 if serverAnchors.isEmpty {
                     DataDonorLogger.shared.log("Server has no data for device. Resetting local anchors to force full resync.", level: .info)
                     self.resetAllAnchors()

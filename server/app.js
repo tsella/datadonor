@@ -56,11 +56,14 @@ fastify.get('/api/v1/health-sync/checkpoint', async (request, reply) => {
     try {
         const db = await getDb();
         const rows = await db.all('SELECT data_type, anchor FROM checkpoints WHERE device_id = ?', deviceId);
+        const countRow = await db.get('SELECT COUNT(*) as count FROM health_metrics WHERE device_id = ?', deviceId);
+        const totalRecords = countRow ? countRow.count : 0;
+        
         const checkpoints = {};
         for (const row of rows) {
             checkpoints[row.data_type] = row.anchor;
         }
-        return { checkpoints };
+        return { checkpoints, total_records: totalRecords };
     } catch (err) {
         logger.error(`Checkpoint inquiry failed: ${err.message}`);
         return reply.status(500).send({ error: 'Internal server error' });
