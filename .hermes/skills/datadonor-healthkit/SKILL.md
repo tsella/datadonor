@@ -33,6 +33,7 @@ Default path: `datadonor/server/data/datadonor.sqlite` (relative to project root
 | Column | Type | Description |
 |---|---|---|
 | `id` | INTEGER PK | Row ID |
+| `uuid` | TEXT | Apple Health unique identifier |
 | `device_id` | TEXT | Links to `devices.device_id` |
 | `data_type` | TEXT | HealthKit quantity/category type identifier |
 | `start_date` | DATETIME | ISO 8601 UTC timestamp |
