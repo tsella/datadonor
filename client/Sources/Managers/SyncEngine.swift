@@ -61,6 +61,7 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
         let url = serverURL.appendingPathComponent("/api/v1/health-sync/checkpoint")
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
         
@@ -77,6 +78,7 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
     func ping(url: URL, apiKey: String) async throws -> Bool {
         var request = URLRequest(url: url.appendingPathComponent("/api/v1/ping"))
         request.httpMethod = "GET"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         
         let (_, response) = try await session.data(for: request)
@@ -114,6 +116,7 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
         
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
         
