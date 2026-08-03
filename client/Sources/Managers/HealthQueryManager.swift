@@ -66,9 +66,9 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
             let identifier = HKQuantityTypeIdentifier(rawValue: sample.sampleType.identifier)
             let preferredUnit = unit(for: identifier)
             let value = quantitySample.quantity.is(compatibleWith: preferredUnit) ? quantitySample.quantity.doubleValue(for: preferredUnit) : 0.0
-            return HealthDataPoint(type: sample.sampleType.identifier, value: .double(value), unit: preferredUnit.unitString, startDate: formatter.string(from: sample.startDate), endDate: formatter.string(from: sample.endDate), source: sample.sourceRevision.source.name)
+            return HealthDataPoint(type: sample.sampleType.identifier, value: .double(value), unit: preferredUnit.unitString, startDate: formatter.string(from: sample.startDate), endDate: formatter.string(from: sample.endDate), source: sample.sourceRevision.source.name, uuid: sample.uuid.uuidString)
         } else if let categorySample = sample as? HKCategorySample {
-            return HealthDataPoint(type: sample.sampleType.identifier, value: .string("\(categorySample.value)"), unit: nil, startDate: formatter.string(from: sample.startDate), endDate: formatter.string(from: sample.endDate), source: sample.sourceRevision.source.name)
+            return HealthDataPoint(type: sample.sampleType.identifier, value: .string("\(categorySample.value)"), unit: nil, startDate: formatter.string(from: sample.startDate), endDate: formatter.string(from: sample.endDate), source: sample.sourceRevision.source.name, uuid: sample.uuid.uuidString)
         }
         return nil
     }
@@ -115,15 +115,20 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
         
         while hasMoreData {
             if isCancelled { break }
-            let (fetchedSamples, newAnchor) = await withCheckedContinuation { continuation in
+            let (fetchedSamples, fetchedDeletedObjects, newAnchor) = await withCheckedContinuation { continuation in
                 let query = HKAnchoredObjectQuery(type: sampleType, predicate: nil, anchor: anchor, limit: limit) { (query, samples, deletedObjects, returnedAnchor, error) in
-                    continuation.resume(returning: (samples, returnedAnchor))
+                    continuation.resume(returning: (samples, deletedObjects, returnedAnchor))
                 }
                 self.healthStore.execute(query)
             }
             
-            if let samples = fetchedSamples, !samples.isEmpty {
-                let dataPoints = samples.compactMap { self.mapSample($0) }
+            let samplesToProcess = fetchedSamples ?? []
+            let deletedToProcess = fetchedDeletedObjects ?? []
+            
+            if !samplesToProcess.isEmpty || !deletedToProcess.isEmpty {
+                let dataPoints = samplesToProcess.compactMap { self.mapSample($0) }
+                let deletedUuids = deletedToProcess.compactMap { $0.uuid.uuidString }
+                
                 let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? "unknown"
                 
                 var base64Anchor: String? = nil
@@ -135,7 +140,8 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
                     deviceId: deviceId,
                     syncTimestamp: ISO8601DateFormatter().string(from: Date()),
                     data: dataPoints,
-                    anchors: [sampleType.identifier: base64Anchor].compactMapValues { $0 }
+                    anchors: [sampleType.identifier: base64Anchor].compactMapValues { $0 },
+                    deletedUuids: deletedUuids.isEmpty ? nil : deletedUuids
                 )
                 
                 do {
@@ -145,13 +151,13 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
                     
                     self.saveAnchor(newAnchor, for: sampleType.identifier)
                     anchor = newAnchor
-                    DataDonorLogger.shared.log("Synced \(samples.count) records for \(sampleType.identifier)", level: .debug)
+                    DataDonorLogger.shared.log("Synced \(samplesToProcess.count) records for \(sampleType.identifier)", level: .debug)
                     
                     // Update stats for DashboardView
                     let now = Date()
                     let shouldUpdateTimestamp = now.timeIntervalSince(self.lastUIUpdateTime) >= 5.0
                     
-                    let recordsCount = samples.count
+                    let recordsCount = samplesToProcess.count
                     DispatchQueue.main.async {
                         self.totalRecordsSynced += recordsCount
                     }
