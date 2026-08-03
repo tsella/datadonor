@@ -18,28 +18,42 @@ class HealthStoreManager: ObservableObject {
             .heartRateVariabilitySDNN,
             .restingHeartRate,
             .walkingHeartRateAverage,
+            .heartRateRecoveryOneMinute,
             .vo2Max,
             .oxygenSaturation,
+            .atrialFibrillationBurden,
             
             // Activity & Mobility
             .stepCount,
             .distanceWalkingRunning,
             .distanceCycling,
             .distanceSwimming,
+            .distanceDownhillSnowSports,
             .swimmingStrokeCount,
+            .underwaterDepth,
+            .waterTemperature,
             .flightsClimbed,
             .activeEnergyBurned,
             .basalEnergyBurned,
             .appleExerciseTime,
+            .appleMoveTime,
             .appleStandTime,
             .walkingAsymmetryPercentage,
             .walkingStepLength,
             .walkingDoubleSupportPercentage,
             .walkingSpeed,
+            .appleWalkingSteadiness,
+            .physicalEffort,
+            .workoutEffortScore,
+            .estimatedWorkoutEffortScore,
+            .numberOfTimesFallen,
             
             // Environmental & Sleep
             .environmentalAudioExposure,
+            .headphoneAudioExposure,
+            .uvExposure,
             .respiratoryRate,
+            .appleSleepingBreathingDisturbances,
             
             // Vitals (General)
             .height,
@@ -49,6 +63,8 @@ class HealthStoreManager: ObservableObject {
             .bodyMassIndex,
             .bodyFatPercentage,
             .leanBodyMass,
+            .bodyTemperature,
+            .bloodGlucose,
             
             // Nutrition (Optional scaffolded)
             .dietaryEnergyConsumed,
