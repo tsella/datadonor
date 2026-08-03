@@ -36,7 +36,7 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
         case .heartRateVariabilitySDNN: return HKUnit.secondUnit(with: .milli)
         case .vo2Max: return HKUnit(from: "ml/(kg*min)")
         case .oxygenSaturation, .bodyFatPercentage, .walkingAsymmetryPercentage, .walkingDoubleSupportPercentage, .atrialFibrillationBurden, .appleWalkingSteadiness: return HKUnit.percent()
-        case .stepCount, .swimmingStrokeCount, .flightsClimbed, .numberOfTimesFallen, .physicalEffort, .workoutEffortScore, .estimatedWorkoutEffortScore, .appleSleepingBreathingDisturbances, .uvExposure: return HKUnit.count()
+        case .stepCount, .swimmingStrokeCount, .flightsClimbed, .numberOfTimesFallen, .uvExposure: return HKUnit.count()
         case .distanceWalkingRunning, .distanceCycling, .distanceSwimming, .distanceDownhillSnowSports, .walkingStepLength, .height, .underwaterDepth: return HKUnit.meter()
         case .activeEnergyBurned, .basalEnergyBurned, .dietaryEnergyConsumed: return HKUnit.kilocalorie()
         case .appleExerciseTime, .appleStandTime, .appleMoveTime: return HKUnit.minute()
@@ -52,6 +52,10 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
         default:
             if #available(iOS 16.0, *), identifier == .appleSleepingWristTemperature { return HKUnit.degreeCelsius() }
             if #available(iOS 17.0, *), identifier == .timeInDaylight { return HKUnit.minute() }
+            if #available(iOS 17.0, *), identifier == .physicalEffort { return HKUnit.count() }
+            if #available(iOS 18.0, *), identifier == .workoutEffortScore { return HKUnit.count() }
+            if #available(iOS 18.0, *), identifier == .estimatedWorkoutEffortScore { return HKUnit.count() }
+            if #available(iOS 18.0, *), identifier == .appleSleepingBreathingDisturbances { return HKUnit.count() }
             return HKUnit.count()
         }
     }
@@ -78,14 +82,22 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
             .flightsClimbed, .activeEnergyBurned, .basalEnergyBurned, .appleExerciseTime,
             .appleMoveTime, .appleStandTime, .walkingAsymmetryPercentage, .walkingStepLength,
             .walkingDoubleSupportPercentage, .walkingSpeed, .appleWalkingSteadiness,
-            .physicalEffort, .workoutEffortScore, .estimatedWorkoutEffortScore, .numberOfTimesFallen,
+            .numberOfTimesFallen,
             .environmentalAudioExposure, .headphoneAudioExposure, .uvExposure, .respiratoryRate,
-            .appleSleepingBreathingDisturbances, .height, .bloodPressureDiastolic,
+            .height, .bloodPressureDiastolic,
             .bloodPressureSystolic, .bodyMass, .bodyMassIndex, .bodyFatPercentage, .leanBodyMass,
             .bodyTemperature, .bloodGlucose, .dietaryEnergyConsumed, .dietaryWater
         ]
         if #available(iOS 16.0, *) { types.append(.appleSleepingWristTemperature) }
-        if #available(iOS 17.0, *) { types.append(.timeInDaylight) }
+        if #available(iOS 17.0, *) { 
+            types.append(.timeInDaylight) 
+            types.append(.physicalEffort)
+        }
+        if #available(iOS 18.0, *) {
+            types.append(.workoutEffortScore)
+            types.append(.estimatedWorkoutEffortScore)
+            types.append(.appleSleepingBreathingDisturbances)
+        }
         return types
     }
     
@@ -97,7 +109,7 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
         ]
     }
     
-    private func exhaustQuery(for sampleType: HKSampleType, syncEngine: SyncEngine, serverURL: URL, apiKey: *** limit: Int = 1000) async {
+    private func exhaustQuery(for sampleType: HKSampleType, syncEngine: SyncEngine, serverURL: URL, apiKey: String, limit: Int = 1000) async {
         var anchor = getAnchor(for: sampleType.identifier)
         var hasMoreData = true
         
@@ -129,7 +141,7 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
                 do {
                     let encoder = JSONEncoder()
                     let payloadData = try encoder.encode(payload)
-                    try await syncEngine.sync(payload: payloadData, serverURL: serverURL, apiKey: ***
+                    try await syncEngine.sync(payload: payloadData, serverURL: serverURL, apiKey: apiKey)
                     
                     self.saveAnchor(newAnchor, for: sampleType.identifier)
                     anchor = newAnchor
@@ -177,7 +189,7 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
         UserDefaults.standard.synchronize()
     }
     
-    func performSync(syncEngine: SyncEngine, networkMonitor: NetworkMonitor, serverURL: URL?, apiKey: *** async {
+    func performSync(syncEngine: SyncEngine, networkMonitor: NetworkMonitor, serverURL: URL?, apiKey: String) async {
         guard let url = serverURL else {
             DataDonorLogger.shared.log("Skipping sync: No server URL resolved.", level: .warn)
             return
@@ -199,7 +211,7 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
         
         let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? "unknown"
         do {
-            if let serverAnchors = try await syncEngine.fetchServerCheckpoint(serverURL: url, apiKey: *** deviceId: deviceId) {
+            if let serverAnchors = try await syncEngine.fetchServerCheckpoint(serverURL: url, apiKey: apiKey, deviceId: deviceId) {
                 if serverAnchors.isEmpty {
                     DataDonorLogger.shared.log("Server has no data for device. Resetting local anchors to force full resync.", level: .info)
                     self.resetAllAnchors()
@@ -229,7 +241,7 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
                 DataDonorLogger.shared.log("Sync was cancelled by user.", level: .info)
                 break
             }
-            await exhaustQuery(for: sampleType, syncEngine: syncEngine, serverURL: url, apiKey: ***
+            await exhaustQuery(for: sampleType, syncEngine: syncEngine, serverURL: url, apiKey: apiKey)
         }
         
         // Final timestamp update

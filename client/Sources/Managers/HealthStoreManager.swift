@@ -43,9 +43,6 @@ class HealthStoreManager: ObservableObject {
             .walkingDoubleSupportPercentage,
             .walkingSpeed,
             .appleWalkingSteadiness,
-            .physicalEffort,
-            .workoutEffortScore,
-            .estimatedWorkoutEffortScore,
             .numberOfTimesFallen,
             
             // Environmental & Sleep
@@ -53,7 +50,6 @@ class HealthStoreManager: ObservableObject {
             .headphoneAudioExposure,
             .uvExposure,
             .respiratoryRate,
-            .appleSleepingBreathingDisturbances,
             
             // Vitals (General)
             .height,
@@ -78,6 +74,12 @@ class HealthStoreManager: ObservableObject {
         }
         if #available(iOS 17.0, *) {
             quantityIdentifiers.append(.timeInDaylight)
+            quantityIdentifiers.append(.physicalEffort)
+        }
+        if #available(iOS 18.0, *) {
+            quantityIdentifiers.append(.workoutEffortScore)
+            quantityIdentifiers.append(.estimatedWorkoutEffortScore)
+            quantityIdentifiers.append(.appleSleepingBreathingDisturbances)
         }
         
         let categoryTypes: [HKCategoryTypeIdentifier] = [
