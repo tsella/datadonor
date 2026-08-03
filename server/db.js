@@ -44,6 +44,7 @@ async function setupDatabase() {
     await db.exec(`
         CREATE TABLE IF NOT EXISTS health_metrics (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT UNIQUE,
             device_id TEXT,
             data_type TEXT NOT NULL,
             start_date DATETIME NOT NULL,

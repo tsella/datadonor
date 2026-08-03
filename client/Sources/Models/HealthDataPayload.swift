@@ -5,12 +5,14 @@ struct HealthDataPayload: Codable {
     let syncTimestamp: String
     let data: [HealthDataPoint]
     let anchors: [String: String]?
+    let deletedUuids: [String]?
     
     enum CodingKeys: String, CodingKey {
         case deviceId = "device_id"
         case syncTimestamp = "sync_timestamp"
         case data
         case anchors
+        case deletedUuids = "deleted_uuids"
     }
 }
 
@@ -21,6 +23,7 @@ struct HealthDataPoint: Codable {
     let startDate: String
     let endDate: String
     let source: String
+    let uuid: String?
     
     enum CodingKeys: String, CodingKey {
         case type
@@ -29,6 +32,7 @@ struct HealthDataPoint: Codable {
         case startDate = "start_date"
         case endDate = "end_date"
         case source
+        case uuid
     }
 }
 

@@ -74,7 +74,7 @@ fastify.get('/api/v1/health-sync/checkpoint', async (request, reply) => {
 let dbQueue = Promise.resolve();
 
 fastify.post('/api/v1/health-sync/post', async (request, reply) => {
-    const { device_id, sync_timestamp, data, anchors } = request.body;
+    const { device_id, sync_timestamp, data, anchors, deleted_uuids } = request.body;
     
     if (!device_id || !Array.isArray(data)) {
         return reply.status(400).send({ error: 'Invalid payload schema' });
@@ -92,8 +92,9 @@ fastify.post('/api/v1/health-sync/post', async (request, reply) => {
         await db.run('BEGIN TRANSACTION');
         
         const stmt = await db.prepare(`
-            INSERT INTO health_metrics (device_id, data_type, start_date, end_date, value, unit, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO health_metrics (device_id, data_type, start_date, end_date, value, unit, source, uuid)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(uuid) DO NOTHING
         `);
 
         for (const metric of data) {
@@ -104,11 +105,21 @@ fastify.post('/api/v1/health-sync/post', async (request, reply) => {
                 metric.end_date,
                 String(metric.value),
                 metric.unit || null,
-                metric.source || null
+                metric.source || null,
+                metric.uuid || null
             );
         }
         
         await stmt.finalize();
+        
+        // Handle deletions
+        if (deleted_uuids && Array.isArray(deleted_uuids) && deleted_uuids.length > 0) {
+            const deleteStmt = await db.prepare(`DELETE FROM health_metrics WHERE uuid = ?`);
+            for (const uuid of deleted_uuids) {
+                await deleteStmt.run(uuid);
+            }
+            await deleteStmt.finalize();
+        }
         
         // Aggregate and UPSERT into daily_sync_stats
         const dailyCounts = {};
