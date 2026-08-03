@@ -155,6 +155,11 @@ struct DashboardView: View {
         }
         .onChange(of: healthQueryManager.totalRecordsSynced) { newTotal in
             if healthQueryManager.isSyncing {
+                // Handle case where server database was wiped, resetting the total below our last tracker
+                if newTotal < lastRefreshCount {
+                    lastRefreshCount = newTotal
+                }
+                
                 if newTotal - lastRefreshCount >= 5000 {
                     lastRefreshCount = newTotal
                     refreshData()
