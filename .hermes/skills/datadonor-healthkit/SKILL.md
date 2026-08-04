@@ -249,3 +249,4 @@ Use the `execute_code` tool for one-off analysis scripts with matplotlib/pandas,
 8. **Dive data is sparse.** Requires Watch Ultra + Depth app use. Check `COUNT(*) > 0` before assuming presence.
 9. **Sleep breathing disturbances** require Watch Series 9 or Ultra 2 + iOS 17+. Only appears if apnea notifications enabled.
 10. **AFib burden** requires Watch with irregular rhythm notification + diagnosis.
+11. **Unit mismatch bug history:** `timeInDaylight` (fixed 2025), `physicalEffort` (fixed 2025). New data types added to `unit(for:)` must specify the correct `HKUnit`. The default `.count()` fallback silently produces `0.0` for incompatible units. Warn-on-mismatch logging added to `mapSample()` catches future issues.
