@@ -94,6 +94,27 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
             return HealthDataPoint(type: sample.sampleType.identifier, value: .double(value), unit: preferredUnit.unitString, startDate: formatter.string(from: sample.startDate), endDate: formatter.string(from: sample.endDate), source: sample.sourceRevision.source.name, uuid: sample.uuid.uuidString, metadata: sampleMetadata)
         } else if let categorySample = sample as? HKCategorySample {
             return HealthDataPoint(type: sample.sampleType.identifier, value: .string("\(categorySample.value)"), unit: nil, startDate: formatter.string(from: sample.startDate), endDate: formatter.string(from: sample.endDate), source: sample.sourceRevision.source.name, uuid: sample.uuid.uuidString, metadata: sampleMetadata)
+        } else if let workoutSample = sample as? HKWorkout {
+            var workoutMeta = sampleMetadata ?? [String: String]()
+            workoutMeta["duration"] = String(workoutSample.duration)
+            if let energy = workoutSample.totalEnergyBurned {
+                workoutMeta["totalEnergyBurned"] = String(energy.doubleValue(for: .kilocalorie()))
+            }
+            if let distance = workoutSample.totalDistance {
+                workoutMeta["totalDistance"] = String(distance.doubleValue(for: .meter()))
+            }
+            workoutMeta["workoutActivityType"] = String(workoutSample.workoutActivityType.rawValue)
+            
+            return HealthDataPoint(
+                type: sample.sampleType.identifier,
+                value: .string(String(workoutSample.workoutActivityType.rawValue)),
+                unit: nil,
+                startDate: formatter.string(from: sample.startDate),
+                endDate: formatter.string(from: sample.endDate),
+                source: sample.sourceRevision.source.name,
+                uuid: sample.uuid.uuidString,
+                metadata: workoutMeta
+            )
         }
         return nil
     }
@@ -132,6 +153,10 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
             .irregularHeartRhythmEvent, .highHeartRateEvent, .lowHeartRateEvent,
             .environmentalAudioExposureEvent
         ]
+    }
+    
+    func getAllSupportedWorkoutTypes() -> [HKWorkoutType] {
+        return [.workoutType()]
     }
     
     private func exhaustQuery(for sampleType: HKSampleType, syncEngine: SyncEngine, serverURL: URL, apiKey: String, limit: Int = 1000) async {
@@ -282,7 +307,8 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
         
         let allQuantities = getAllSupportedQuantityTypes().compactMap { HKObjectType.quantityType(forIdentifier: $0) }
         let allCategories = getAllSupportedCategoryTypes().compactMap { HKObjectType.categoryType(forIdentifier: $0) }
-        let allTypes: [HKSampleType] = allQuantities + allCategories
+        let allWorkouts = getAllSupportedWorkoutTypes()
+        let allTypes: [HKSampleType] = allQuantities + allCategories + allWorkouts
         
         for sampleType in allTypes {
             if isCancelled {

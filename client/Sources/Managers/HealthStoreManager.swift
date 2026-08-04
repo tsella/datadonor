@@ -107,6 +107,8 @@ class HealthStoreManager: ObservableObject {
             }
         }
         
+        readTypes.insert(HKObjectType.workoutType())
+        
         healthStore.requestAuthorization(toShare: nil, read: readTypes) { success, error in
             DispatchQueue.main.async {
                 self.isAuthorized = success
