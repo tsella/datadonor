@@ -52,7 +52,7 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
         default:
             if #available(iOS 16.0, *), identifier == .appleSleepingWristTemperature { return HKUnit.degreeCelsius() }
             if #available(iOS 17.0, *), identifier == .timeInDaylight { return HKUnit.minute() }
-            if #available(iOS 17.0, *), identifier == .physicalEffort { return HKUnit(from: "MET") }
+            if #available(iOS 17.0, *), identifier == .physicalEffort { return HKUnit.kilocalorie().unitDivided(by: HKUnit.gramUnit(with: .kilo).unitMultiplied(by: HKUnit.hour())) }
             if #available(iOS 18.0, *), identifier == .workoutEffortScore { return HKUnit.count() }
             if #available(iOS 18.0, *), identifier == .estimatedWorkoutEffortScore { return HKUnit.count() }
             if #available(iOS 18.0, *), identifier == .appleSleepingBreathingDisturbances { return HKUnit.count() }
