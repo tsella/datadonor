@@ -111,6 +111,7 @@ Default path: `datadonor/server/data/datadonor.sqlite` (relative to project root
 | `HKQuantityTypeIdentifierWalkingSpeed` | Gait speed |
 | `HKQuantityTypeIdentifierAppleWalkingSteadiness` | Fall risk |
 | `HKQuantityTypeIdentifierNumberOfTimesFallen` | Fall events |
+| `HKWorkoutTypeIdentifier` | Workouts. `value` is integer enum (e.g. 37=Running). `metadata` JSON contains `duration` (sec), `totalEnergyBurned` (kcal), `totalDistance` (m). |
 
 ### Mobility (Watch 6+)
 
