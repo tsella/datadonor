@@ -52,7 +52,7 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
         default:
             if #available(iOS 16.0, *), identifier == .appleSleepingWristTemperature { return HKUnit.degreeCelsius() }
             if #available(iOS 17.0, *), identifier == .timeInDaylight { return HKUnit.minute() }
-            if #available(iOS 17.0, *), identifier == .physicalEffort { return HKUnit.count() }
+            if #available(iOS 17.0, *), identifier == .physicalEffort { return HKUnit(from: "MET") }
             if #available(iOS 18.0, *), identifier == .workoutEffortScore { return HKUnit.count() }
             if #available(iOS 18.0, *), identifier == .estimatedWorkoutEffortScore { return HKUnit.count() }
             if #available(iOS 18.0, *), identifier == .appleSleepingBreathingDisturbances { return HKUnit.count() }
@@ -65,7 +65,13 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
         if let quantitySample = sample as? HKQuantitySample {
             let identifier = HKQuantityTypeIdentifier(rawValue: sample.sampleType.identifier)
             let preferredUnit = unit(for: identifier)
-            let value = quantitySample.quantity.is(compatibleWith: preferredUnit) ? quantitySample.quantity.doubleValue(for: preferredUnit) : 0.0
+            let value: Double
+            if quantitySample.quantity.is(compatibleWith: preferredUnit) {
+                value = quantitySample.quantity.doubleValue(for: preferredUnit)
+            } else {
+                value = 0.0
+                DataDonorLogger.shared.log("Unit mismatch: \(sample.sampleType.identifier) sample unit \(quantitySample.quantity) is incompatible with preferred unit \(preferredUnit.unitString). Storing 0.0.\", level: .warn)
+            }
             return HealthDataPoint(type: sample.sampleType.identifier, value: .double(value), unit: preferredUnit.unitString, startDate: formatter.string(from: sample.startDate), endDate: formatter.string(from: sample.endDate), source: sample.sourceRevision.source.name, uuid: sample.uuid.uuidString)
         } else if let categorySample = sample as? HKCategorySample {
             return HealthDataPoint(type: sample.sampleType.identifier, value: .string("\(categorySample.value)"), unit: nil, startDate: formatter.string(from: sample.startDate), endDate: formatter.string(from: sample.endDate), source: sample.sourceRevision.source.name, uuid: sample.uuid.uuidString)
