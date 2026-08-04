@@ -70,7 +70,7 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
                 value = quantitySample.quantity.doubleValue(for: preferredUnit)
             } else {
                 value = 0.0
-                DataDonorLogger.shared.log("Unit mismatch: \(sample.sampleType.identifier) sample unit \(quantitySample.quantity) is incompatible with preferred unit \(preferredUnit.unitString). Storing 0.0.\", level: .warn)
+                DataDonorLogger.shared.log("Unit mismatch: \(sample.sampleType.identifier) sample unit \(quantitySample.quantity) is incompatible with preferred unit \(preferredUnit.unitString). Storing 0.0.", level: .warn)
             }
             return HealthDataPoint(type: sample.sampleType.identifier, value: .double(value), unit: preferredUnit.unitString, startDate: formatter.string(from: sample.startDate), endDate: formatter.string(from: sample.endDate), source: sample.sourceRevision.source.name, uuid: sample.uuid.uuidString)
         } else if let categorySample = sample as? HKCategorySample {
