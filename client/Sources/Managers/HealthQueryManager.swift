@@ -62,6 +62,25 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
     
     private func mapSample(_ sample: HKSample) -> HealthDataPoint? {
         let formatter = ISO8601DateFormatter()
+        
+        let sampleMetadata: [String: String]? = {
+            var dict = [String: String]()
+            if let meta = sample.metadata {
+                for (key, value) in meta {
+                    if let numberValue = value as? NSNumber {
+                        dict[key] = numberValue.stringValue
+                    } else if let stringValue = value as? String {
+                        dict[key] = stringValue
+                    } else if let dateValue = value as? Date {
+                        dict[key] = formatter.string(from: dateValue)
+                    } else {
+                        dict[key] = String(describing: value)
+                    }
+                }
+            }
+            return dict.isEmpty ? nil : dict
+        }()
+        
         if let quantitySample = sample as? HKQuantitySample {
             let identifier = HKQuantityTypeIdentifier(rawValue: sample.sampleType.identifier)
             let preferredUnit = unit(for: identifier)
@@ -72,9 +91,9 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
                 value = 0.0
                 DataDonorLogger.shared.log("Unit mismatch: \(sample.sampleType.identifier) sample unit \(quantitySample.quantity) is incompatible with preferred unit \(preferredUnit.unitString). Storing 0.0.", level: .warn)
             }
-            return HealthDataPoint(type: sample.sampleType.identifier, value: .double(value), unit: preferredUnit.unitString, startDate: formatter.string(from: sample.startDate), endDate: formatter.string(from: sample.endDate), source: sample.sourceRevision.source.name, uuid: sample.uuid.uuidString)
+            return HealthDataPoint(type: sample.sampleType.identifier, value: .double(value), unit: preferredUnit.unitString, startDate: formatter.string(from: sample.startDate), endDate: formatter.string(from: sample.endDate), source: sample.sourceRevision.source.name, uuid: sample.uuid.uuidString, metadata: sampleMetadata)
         } else if let categorySample = sample as? HKCategorySample {
-            return HealthDataPoint(type: sample.sampleType.identifier, value: .string("\(categorySample.value)"), unit: nil, startDate: formatter.string(from: sample.startDate), endDate: formatter.string(from: sample.endDate), source: sample.sourceRevision.source.name, uuid: sample.uuid.uuidString)
+            return HealthDataPoint(type: sample.sampleType.identifier, value: .string("\(categorySample.value)"), unit: nil, startDate: formatter.string(from: sample.startDate), endDate: formatter.string(from: sample.endDate), source: sample.sourceRevision.source.name, uuid: sample.uuid.uuidString, metadata: sampleMetadata)
         }
         return nil
     }
