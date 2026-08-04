@@ -24,6 +24,7 @@ struct HealthDataPoint: Codable {
     let endDate: String
     let source: String
     let uuid: String?
+    let metadata: [String: String]?
     
     enum CodingKeys: String, CodingKey {
         case type
@@ -33,6 +34,7 @@ struct HealthDataPoint: Codable {
         case endDate = "end_date"
         case source
         case uuid
+        case metadata
     }
 }
 
