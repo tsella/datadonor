@@ -92,8 +92,8 @@ fastify.post('/api/v1/health-sync/post', async (request, reply) => {
         await db.run('BEGIN TRANSACTION');
         
         const stmt = await db.prepare(`
-            INSERT INTO health_metrics (device_id, data_type, start_date, end_date, value, unit, source, uuid)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO health_metrics (device_id, data_type, start_date, end_date, value, unit, source, uuid, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(uuid) DO NOTHING
         `);
 
@@ -106,7 +106,8 @@ fastify.post('/api/v1/health-sync/post', async (request, reply) => {
                 String(metric.value),
                 metric.unit || null,
                 metric.source || null,
-                metric.uuid || null
+                metric.uuid || null,
+                metric.metadata ? JSON.stringify(metric.metadata) : null
             );
         }
         
