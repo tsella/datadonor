@@ -75,20 +75,10 @@ struct LogViewer: View {
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, prompt: "Search logs...")
         .onAppear {
-            Task {
-                await loadLogs()
-                
-                // Generate dummy logs for demonstration if empty
-                if entries.isEmpty {
-                    DataDonorLogger.shared.log("Initialized DataDonorLogger", level: .info)
-                    DataDonorLogger.shared.log("Checking HealthKit permissions...", level: .debug)
-                    DataDonorLogger.shared.log("Waiting for network connection.", level: .warn)
-                    
-                    // Allow time for async file writing
-                    try? await Task.sleep(nanoseconds: 100_000_000)
-                    await loadLogs()
-                }
-            }
+            Task { await loadLogs() }
+        }
+        .refreshable {
+            await loadLogs()
         }
     }
     
@@ -113,10 +103,13 @@ struct LogViewer: View {
             if line.hasPrefix("[") {
                 let parts = line.split(separator: "]", maxSplits: 2, omittingEmptySubsequences: false)
                 if parts.count >= 3 {
-                    let levelStr = parts[0].dropFirst().trimmingCharacters(in: .whitespaces)
-                    let timeStr = parts[1].dropFirst().trimmingCharacters(in: .whitespaces)
+                    // Lines look like "[LEVEL] [TIMESTAMP] message". Trim both the space and
+                    // the bracket — trimming whitespace alone left a stray "[" on timestamps.
+                    let brackets = CharacterSet(charactersIn: " [")
+                    let levelStr = parts[0].trimmingCharacters(in: brackets)
+                    let timeStr = parts[1].trimmingCharacters(in: brackets)
                     let msgStr = parts[2].trimmingCharacters(in: .whitespaces)
-                    
+
                     let level = LogLevel(rawValue: levelStr) ?? .info
                     parsed.append(LogEntry(timestamp: timeStr, level: level, message: msgStr, raw: line))
                 }

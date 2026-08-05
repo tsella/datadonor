@@ -46,6 +46,13 @@ struct SettingsView: View {
                         Text(server)
                     }
                     .onDelete { indexSet in
+                        // Drop the pinned certificate too, so re-approving a server with a
+                        // rotated cert works instead of failing the pin check forever.
+                        for index in indexSet {
+                            if let host = URL(string: approvedServers[index])?.host {
+                                ServerTrustStore.shared.forget(host: host)
+                            }
+                        }
                         approvedServers.remove(atOffsets: indexSet)
                         UserDefaults.standard.set(approvedServers, forKey: "approvedServers")
                     }
@@ -57,7 +64,15 @@ struct SettingsView: View {
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled(true)
-                
+
+                if ServerResolver.overrideIsInvalid(customServerURL) {
+                    Label(
+                        "Not a valid URL. Include the scheme, e.g. https://192.168.1.5:8443",
+                        systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+
                 if customServerURL.isEmpty {
                     HStack {
                         Text("Active:")

@@ -15,68 +15,63 @@ struct QRScannerView: UIViewControllerRepresentable {
 }
 
 class ScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
-    var captureSession: AVCaptureSession!
-    var previewLayer: AVCaptureVideoPreviewLayer!
+    var captureSession: AVCaptureSession?
+    var previewLayer: AVCaptureVideoPreviewLayer?
     var onResult: ((String) -> Void)?
     
     override func viewDidLoad() {
         super.viewDidLoad()
         
         view.backgroundColor = UIColor.black
-        captureSession = AVCaptureSession()
-        
-        guard let videoCaptureDevice = AVCaptureDevice.default(for: .video) else { return }
-        let videoInput: AVCaptureDeviceInput
-        
-        do {
-            videoInput = try AVCaptureDeviceInput(device: videoCaptureDevice)
-        } catch {
+        let session = AVCaptureSession()
+
+        guard let videoCaptureDevice = AVCaptureDevice.default(for: .video),
+              let videoInput = try? AVCaptureDeviceInput(device: videoCaptureDevice),
+              session.canAddInput(videoInput) else {
             return
         }
-        
-        if (captureSession.canAddInput(videoInput)) {
-            captureSession.addInput(videoInput)
-        } else {
-            return
-        }
-        
+        session.addInput(videoInput)
+
         let metadataOutput = AVCaptureMetadataOutput()
-        
-        if (captureSession.canAddOutput(metadataOutput)) {
-            captureSession.addOutput(metadataOutput)
-            
-            metadataOutput.setMetadataObjectsDelegate(self, queue: DispatchQueue.main)
-            metadataOutput.metadataObjectTypes = [.qr]
-        } else {
-            return
-        }
-        
-        previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
-        previewLayer.frame = view.layer.bounds
-        previewLayer.videoGravity = .resizeAspectFill
-        view.layer.addSublayer(previewLayer)
-        
-        DispatchQueue.global(qos: .background).async {
-            self.captureSession.startRunning()
+        guard session.canAddOutput(metadataOutput) else { return }
+        session.addOutput(metadataOutput)
+        metadataOutput.setMetadataObjectsDelegate(self, queue: DispatchQueue.main)
+        metadataOutput.metadataObjectTypes = [.qr]
+
+        let layer = AVCaptureVideoPreviewLayer(session: session)
+        layer.frame = view.layer.bounds
+        layer.videoGravity = .resizeAspectFill
+        view.layer.addSublayer(layer)
+
+        captureSession = session
+        previewLayer = layer
+
+        startSession()
+    }
+
+    /// startRunning()/stopRunning() block, so they must stay off the main thread.
+    private func startSession() {
+        guard let session = captureSession, !session.isRunning else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            session.startRunning()
         }
     }
-    
+
+    private func stopSession() {
+        guard let session = captureSession, session.isRunning else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            session.stopRunning()
+        }
+    }
+
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        
-        if captureSession?.isRunning == false {
-            DispatchQueue.global(qos: .background).async {
-                self.captureSession.startRunning()
-            }
-        }
+        startSession()
     }
-    
+
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        
-        if captureSession?.isRunning == true {
-            captureSession.stopRunning()
-        }
+        stopSession()
     }
     
     override func viewDidLayoutSubviews() {
@@ -85,13 +80,17 @@ class ScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDel
     }
     
     func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
-        captureSession.stopRunning()
-        
-        if let metadataObject = metadataObjects.first {
-            guard let readableObject = metadataObject as? AVMetadataMachineReadableCodeObject else { return }
-            guard let stringValue = readableObject.stringValue else { return }
-            AudioServicesPlaySystemSound(SystemSoundID(kSystemSoundID_Vibrate))
-            onResult?(stringValue)
+        // Only tear down the session once we have a usable value. Stopping first meant an
+        // unreadable code left the preview frozen with no way to retry.
+        guard let readableObject = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
+              let stringValue = readableObject.stringValue,
+              !stringValue.isEmpty else {
+            return
         }
+
+        stopSession()
+
+        AudioServicesPlaySystemSound(SystemSoundID(kSystemSoundID_Vibrate))
+        onResult?(stringValue)
     }
 }

@@ -1,5 +1,6 @@
 import SwiftUI
 import Charts
+import UIKit
 
 struct SyncDataPoint: Identifiable, Equatable {
     let id = UUID()
@@ -138,7 +139,7 @@ struct DashboardView: View {
                 refreshData()
             }
         }
-        .onChange(of: serverDiscoveryManager.resolvedURL) { newURL in
+        .onChange(of: serverDiscoveryManager.activeServerURL) { newURL in
             if newURL != nil {
                 refreshData()
             }
@@ -172,8 +173,11 @@ struct DashboardView: View {
             }
         }
         
-        let serverStr = !customServerURL.isEmpty ? customServerURL : serverDiscoveryManager.resolvedURL?.absoluteString ?? ""
-        guard let serverURL = URL(string: serverStr) else { return }
+        // Only ever talk to an approved server — this used to use the pre-approval
+        // `resolvedURL`, which sent the API key to any host that answered mDNS.
+        guard let serverURL = ServerResolver.resolve(
+            override: customServerURL,
+            discovered: serverDiscoveryManager.activeServerURL) else { return }
         let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? ""
         
         do {

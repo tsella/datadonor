@@ -114,6 +114,11 @@ class HealthStoreManager: ObservableObject {
                 if success {
                     self.isAuthorized = true
                     UserDefaults.standard.set(true, forKey: "hasRequestedHealthAccess")
+                    // Now that we're authorized, ask HealthKit to wake us on new data.
+                    BackgroundSyncManager.shared.setupObserverQueries(healthStore: self.healthStore)
+                }
+                if let error = error {
+                    DataDonorLogger.shared.log("HealthKit authorization error: \(error.localizedDescription)", level: .error)
                 }
             }
             completion(success, error)
