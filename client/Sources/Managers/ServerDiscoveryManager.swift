@@ -73,13 +73,13 @@ class ServerDiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
         if let url = URL(string: "https://\(cleanHost):\(port)") {
             print("[Bonjour] Constructed URL: \(url.absoluteString)")
             DispatchQueue.main.async {
-                let urlStr = url.absoluteString
-                let approvedServers = UserDefaults.standard.stringArray(forKey: "approvedServers") ?? []
-
-                if approvedServers.contains(urlStr) {
+                if ServerResolver.isApproved(url) {
                     self.activeServerURL = url
                     ServerResolver.rememberActive(url)
                 } else {
+                    // Publish the pending server as plain state. The view derives alert
+                    // presentation from "is something pending?", so re-proposing the same
+                    // URL needs no transition and this can stay a straightforward assignment.
                     self.pendingApprovalURL = url
                 }
             }

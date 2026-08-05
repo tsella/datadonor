@@ -8,7 +8,6 @@ struct ContentView: View {
     @AppStorage("apiKey") private var apiKey = ""
     @AppStorage("customServerURL") private var customServerURL = ""
     
-    @State private var showingApprovalAlert = false
     
     var body: some View {
         NavigationStack {
@@ -190,11 +189,6 @@ struct ContentView: View {
             .onAppear {
                 serverDiscoveryManager.startDiscovery()
             }
-            .onChange(of: serverDiscoveryManager.pendingApprovalURL) { newURL in
-                if newURL != nil {
-                    showingApprovalAlert = true
-                }
-            }
             .onChange(of: serverDiscoveryManager.activeServerURL) { newURL in
                 guard newURL != nil, !healthQueryManager.isSyncing, healthStoreManager.isAuthorized,
                       !apiKey.isEmpty else { return }
@@ -209,14 +203,19 @@ struct ContentView: View {
             .onChange(of: healthQueryManager.isSyncing) { isSyncing in
                 UIApplication.shared.isIdleTimerDisabled = isSyncing
             }
-            .alert("New Server Discovered", isPresented: $showingApprovalAlert) {
+            // Presentation is derived from the model rather than driven by transitions:
+            // whenever a server is pending approval the alert is shown, so re-discovering
+            // the same server needs no publisher trickery and dismissing clears the pending
+            // value at its source.
+            .alert("New Server Discovered", isPresented: Binding(
+                get: { serverDiscoveryManager.pendingApprovalURL != nil },
+                set: { if !$0 { serverDiscoveryManager.pendingApprovalURL = nil } }
+            )) {
                 Button("Approve") {
                     if let url = serverDiscoveryManager.pendingApprovalURL {
-                        var approved = UserDefaults.standard.stringArray(forKey: "approvedServers") ?? []
-                        if !approved.contains(url.absoluteString) {
-                            approved.append(url.absoluteString)
-                        }
-                        UserDefaults.standard.set(approved, forKey: "approvedServers")
+                        // Canonicalizes and de-dupes across casing, so approving `Mac.lan`
+                        // when `mac.lan` is already stored cannot append a second entry.
+                        ServerResolver.approve(url)
 
                         serverDiscoveryManager.activeServerURL = url
                         // Make the server reachable from the background task too.

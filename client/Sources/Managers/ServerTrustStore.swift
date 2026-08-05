@@ -18,16 +18,9 @@ final class ServerTrustStore: @unchecked Sendable {
     }
 
     private let pinsKey = "pinnedServerKeys"
-    private let approvedKey = "approvedServers"
     private let lock = NSLock()
 
     private init() {}
-
-    /// Hosts the user approved, derived from the stored approved-server URLs.
-    private func approvedHosts() -> Set<String> {
-        let urls = UserDefaults.standard.stringArray(forKey: approvedKey) ?? []
-        return Set(urls.compactMap { URL(string: $0)?.host })
-    }
 
     private func pins() -> [String: String] {
         UserDefaults.standard.dictionary(forKey: pinsKey) as? [String: String] ?? [:]
@@ -35,8 +28,16 @@ final class ServerTrustStore: @unchecked Sendable {
 
     private func store(pin: String, for host: String) {
         var current = pins()
-        current[host] = pin
+        current[normalize(host)] = pin
         UserDefaults.standard.set(current, forKey: pinsKey)
+    }
+
+    /// Hostnames are case-insensitive, and the two sides disagree in practice: Bonjour
+    /// advertises `Mac.lan` while URLSession lowercases to `mac.lan` for the TLS challenge.
+    /// `ServerResolver` owns that canonical form so approval, pinning and discovery cannot
+    /// drift apart.
+    private func normalize(_ host: String) -> String {
+        ServerResolver.canonicalHost(host)
     }
 
     /// Removes the pin for a host, so a rotated certificate can be re-trusted on next
@@ -44,8 +45,10 @@ final class ServerTrustStore: @unchecked Sendable {
     func forget(host: String) {
         lock.lock()
         defer { lock.unlock() }
-        var current = pins()
-        current.removeValue(forKey: host)
+        // Drop every entry matching case-insensitively: pins written by older builds were
+        // keyed by the raw host, so a stale `Mac.lan` entry can sit beside `mac.lan`.
+        let target = normalize(host)
+        let current = pins().filter { normalize($0.key) != target }
         UserDefaults.standard.set(current, forKey: pinsKey)
     }
 
@@ -53,7 +56,9 @@ final class ServerTrustStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
-        guard approvedHosts().contains(host) else {
+        let host = normalize(host)
+
+        guard ServerResolver.approvedHosts().contains(host) else {
             return .rejected("host is not in the approved server list")
         }
 

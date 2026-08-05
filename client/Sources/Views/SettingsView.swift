@@ -8,7 +8,7 @@ struct SettingsView: View {
     @AppStorage("isApiKeyVerified") private var isApiKeyVerified = false
     @State private var isShowingQRScanner = false
     
-    @State private var approvedServers: [String] = UserDefaults.standard.stringArray(forKey: "approvedServers") ?? []
+    @State private var approvedServers: [String] = ServerResolver.approvedServers()
     
     var body: some View {
         Form {
@@ -51,10 +51,12 @@ struct SettingsView: View {
                         for index in indexSet {
                             if let host = URL(string: approvedServers[index])?.host {
                                 ServerTrustStore.shared.forget(host: host)
+                                // Removes every stored entry for this host, including
+                                // differently-cased ones left by older builds.
+                                ServerResolver.revokeApproval(matchingHost: host)
                             }
                         }
-                        approvedServers.remove(atOffsets: indexSet)
-                        UserDefaults.standard.set(approvedServers, forKey: "approvedServers")
+                        approvedServers = ServerResolver.approvedServers()
                     }
                 }
             }
@@ -96,7 +98,7 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            approvedServers = UserDefaults.standard.stringArray(forKey: "approvedServers") ?? []
+            approvedServers = ServerResolver.approvedServers()
         }
         .sheet(isPresented: $isShowingQRScanner) {
             QRScannerView { scannedKey in
