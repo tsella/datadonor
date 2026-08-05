@@ -212,7 +212,7 @@ fastify.get('/api/v1/health-sync/stats', async (request, reply) => {
             if (type.includes('HeartRate') || type.includes('SDNN')) return 'Heart Rate';
             if (type.includes('Step') || type.includes('Walking') || type.includes('Flights')) return 'Steps';
             if (type.includes('Sleep') || type.includes('Respiratory')) return 'Sleep';
-            if (type.includes('Exercise') || type.includes('Energy') || type.includes('Distance') || type.includes('Swimming')) return 'Workouts';
+            if (type.includes('Exercise') || type.includes('Energy') || type.includes('Distance') || type.includes('Swimming') || type.includes('HKWorkout')) return 'Workouts';
             return 'Other';
         };
 
