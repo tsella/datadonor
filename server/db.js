@@ -84,11 +84,14 @@ async function setupDatabase() {
         const metricsCheck = await db.get(`SELECT count(*) as count FROM health_metrics`);
         if (metricsCheck.count > 0) {
             logger.info('Backfilling daily_sync_stats from existing health_metrics... This might take a moment.');
+            // substr(start_date,1,10) matches how ingestion buckets (start_date.split('T')[0]).
+            // date() would normalize offsets to UTC and shift buckets by a day relative to
+            // the live path for any client that sends non-UTC timestamps.
             await db.exec(`
                 INSERT INTO daily_sync_stats (device_id, date_bucket, data_type, record_count)
-                SELECT device_id, date(start_date), data_type, COUNT(*)
+                SELECT device_id, substr(start_date, 1, 10), data_type, COUNT(*)
                 FROM health_metrics
-                GROUP BY device_id, date(start_date), data_type;
+                GROUP BY device_id, substr(start_date, 1, 10), data_type;
             `);
             logger.info('Backfill complete!');
         }
@@ -98,11 +101,12 @@ async function setupDatabase() {
     return db;
 }
 
-// Start DB setup immediately
-dbPromise = setupDatabase().catch(err => {
-    logger.error(`Database setup failed: ${err.message}`);
-    process.exit(1);
-});
+// Start DB setup immediately, but let the rejection propagate. Calling process.exit() in a
+// catch here used to leave getDb() resolving to `undefined` for the interval before the
+// process actually died, turning the real error into a confusing TypeError in every handler.
+dbPromise = setupDatabase();
+// Avoid an unhandled rejection warning if nothing awaits it before startup fails.
+dbPromise.catch(() => {});
 
 module.exports = {
     getDb: () => dbPromise
