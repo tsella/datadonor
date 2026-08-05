@@ -11,3 +11,10 @@ server/data/
 !server/data/.gitkeep
 server/certs/
 !server/certs/.gitkeep
+
+# Never commit health databases, wherever they land
+*.db
+*.sqlite
+*.sqlite3
+*-shm
+*-wal

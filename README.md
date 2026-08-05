@@ -1,6 +1,6 @@
 # DataDonor
 
-DataDonor is an iOS application designed to run in the background, collect all available Apple Health data via HealthKit, and securely transmit it to a local server. The app features mDNS server discovery, strict Wi-Fi SSID network monitoring, and automatic background syncs to ensure your health data remains securely stored on your own local infrastructure.
+DataDonor is an iOS application designed to run in the background, collect all available Apple Health data via HealthKit, and securely transmit it to a local server. The app features mDNS server discovery, explicit server approval with certificate pinning, and automatic background syncs to ensure your health data remains securely stored on your own local infrastructure.
 
 ## Supported Health Data
 DataDonor comprehensively extracts both time-series quantity samples and category events. Currently supported metrics include:
@@ -13,9 +13,9 @@ DataDonor comprehensively extracts both time-series quantity samples and categor
 
 ## Features
 - **HealthKit Integration**: Broad-net extraction engine that securely reads and correctly standardizes units for over 35 distinct HealthKit metrics.
-- **Background URLSession**: Ensures that massive historical data payloads successfully upload even if the app is placed in the background.
-- **Network Path Monitoring**: Restricts data syncing to a specific Wi-Fi SSID to ensure data only transfers when connected to your secure local network.
-- **Self-Signed Certificate Trust**: Allows the use of locally signed certificates for your server backend.
+- **Background URLSession**: Ensures that massive historical data payloads successfully upload even if the app is placed in the background. Uploads are acknowledged by the server before the sync checkpoint advances, so a failed upload is retried rather than skipped.
+- **Automatic Background Sync**: Registers a periodic background refresh task and observes HealthKit for new samples, syncing without needing the app opened.
+- **Approved Servers & Certificate Pinning**: Servers discovered over mDNS require explicit approval. On approval the server's certificate is pinned, so self-signed certificates work while a substituted certificate is rejected.
 
 ## API Key Configuration & QR Scanner
 To securely link your iOS client to your backend server, DataDonor uses an API Key. Instead of manually typing long alphanumeric strings on your iPhone, you can quickly scan a QR code!
@@ -41,7 +41,7 @@ To run DataDonor on your personal iPhone, you must build and deploy it directly 
 1. Register for an [Apple Developer Account](https://developer.apple.com/) (a free tier account is sufficient, though the app will expire every 7 days and require a rebuild. A paid account allows 1-year provisioning).
 2. Open `client/DataDonor.xcodeproj` in Xcode.
 3. In the project navigator, select the `DataDonor` target, navigate to the **Signing & Capabilities** tab, and select your Personal Team from the dropdown.
-4. Ensure the **HealthKit** and **Access WiFi Information** capabilities are active and provisioned without red errors.
+4. Ensure the **HealthKit** capability is active (including **Background Delivery**) and provisioned without red errors.
 5. Connect your iPhone to your Mac, select it as the run destination at the top, and hit **Cmd + R** to build and deploy!
 
 ## Data Privacy & Security Responsibility
