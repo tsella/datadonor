@@ -2,6 +2,10 @@ import Foundation
 import Combine
 
 class ServerDiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDelegate, NetServiceDelegate {
+    @Published var activeServerURL: URL?
+    @Published var pendingApprovalURL: URL?
+    
+    // Legacy support to prevent build errors immediately, though we'll remove uses of it
     @Published var resolvedURL: URL?
     
     private var browser: NetServiceBrowser
@@ -70,7 +74,16 @@ class ServerDiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
         if let url = URL(string: "https://\(cleanHost):\(port)") {
             print("[Bonjour] Constructed URL: \(url.absoluteString)")
             DispatchQueue.main.async {
-                self.resolvedURL = url
+                self.resolvedURL = url // Keep for Dashboard fetch stats backward compatibility until updated
+                
+                let urlStr = url.absoluteString
+                let approvedServers = UserDefaults.standard.stringArray(forKey: "approvedServers") ?? []
+                
+                if approvedServers.contains(urlStr) {
+                    self.activeServerURL = url
+                } else {
+                    self.pendingApprovalURL = url
+                }
             }
         }
         

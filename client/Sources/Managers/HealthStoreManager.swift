@@ -4,7 +4,7 @@ import HealthKit
 class HealthStoreManager: ObservableObject {
     let healthStore = HKHealthStore()
     
-    @Published var isAuthorized = false
+    @Published var isAuthorized: Bool = UserDefaults.standard.bool(forKey: "hasRequestedHealthAccess")
     
     func requestAuthorization(completion: @escaping (Bool, Error?) -> Void = { _, _ in }) {
         guard HKHealthStore.isHealthDataAvailable() else {
@@ -111,7 +111,10 @@ class HealthStoreManager: ObservableObject {
         
         healthStore.requestAuthorization(toShare: nil, read: readTypes) { success, error in
             DispatchQueue.main.async {
-                self.isAuthorized = success
+                if success {
+                    self.isAuthorized = true
+                    UserDefaults.standard.set(true, forKey: "hasRequestedHealthAccess")
+                }
             }
             completion(success, error)
         }

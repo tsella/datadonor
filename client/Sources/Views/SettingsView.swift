@@ -2,14 +2,13 @@ import SwiftUI
 
 struct SettingsView: View {
     @AppStorage("apiKey") private var apiKey = ""
-    @AppStorage("targetSSID") private var targetSSID = ""
-    @AppStorage("isSSIDLocked") private var isSSIDLocked = false
     @AppStorage("customServerURL") private var customServerURL = ""
-    @EnvironmentObject private var networkMonitor: NetworkMonitor
     @EnvironmentObject private var serverDiscoveryManager: ServerDiscoveryManager
     
     @AppStorage("isApiKeyVerified") private var isApiKeyVerified = false
     @State private var isShowingQRScanner = false
+    
+    @State private var approvedServers: [String] = UserDefaults.standard.stringArray(forKey: "approvedServers") ?? []
     
     var body: some View {
         Form {
@@ -37,42 +36,18 @@ struct SettingsView: View {
                 }
             }
             
-            Section(header: Text("Network Sync"), footer: Text("The app will only sync when connected to this Wi-Fi network.")) {
-                HStack {
-                    if isSSIDLocked {
-                        Text(targetSSID.isEmpty ? "None" : targetSSID)
-                            .foregroundColor(targetSSID.isEmpty ? .gray : .primary)
-                    } else {
-                        TextField("Target Wi-Fi SSID", text: $targetSSID)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled(true)
+            Section(header: Text("Approved Servers"), footer: Text("Automatically sync when discovering these Bonjour servers.")) {
+                if approvedServers.isEmpty {
+                    Text("No servers approved yet.")
+                        .foregroundColor(.secondary)
+                        .italic()
+                } else {
+                    ForEach(approvedServers, id: \.self) { server in
+                        Text(server)
                     }
-                    
-                    Spacer()
-                    
-                    Button(action: {
-                        withAnimation {
-                            isSSIDLocked.toggle()
-                        }
-                    }) {
-                        Image(systemName: isSSIDLocked ? "lock.fill" : "lock.open.fill")
-                            .foregroundColor(isSSIDLocked ? .green : .gray)
-                    }
-                }
-                
-                if !isSSIDLocked, let currentSSID = networkMonitor.currentSSID, !currentSSID.isEmpty {
-                    Button(action: {
-                        targetSSID = currentSSID
-                        withAnimation {
-                            isSSIDLocked = true
-                        }
-                    }) {
-                        HStack {
-                            Text("Use Current: \(currentSSID)")
-                                .foregroundColor(.primary)
-                            Spacer()
-                            SignalStrengthView(strength: networkMonitor.currentSignalStrength)
-                        }
+                    .onDelete { indexSet in
+                        approvedServers.remove(atOffsets: indexSet)
+                        UserDefaults.standard.set(approvedServers, forKey: "approvedServers")
                     }
                 }
             }
@@ -85,11 +60,11 @@ struct SettingsView: View {
                 
                 if customServerURL.isEmpty {
                     HStack {
-                        Text("Discovered:")
+                        Text("Active:")
                             .foregroundColor(.secondary)
                         Spacer()
-                        if let resolved = serverDiscoveryManager.resolvedURL {
-                            Text(resolved.absoluteString)
+                        if let active = serverDiscoveryManager.activeServerURL {
+                            Text(active.absoluteString)
                                 .foregroundColor(.green)
                         } else {
                             Text("Searching...")
@@ -105,6 +80,9 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            approvedServers = UserDefaults.standard.stringArray(forKey: "approvedServers") ?? []
+        }
         .sheet(isPresented: $isShowingQRScanner) {
             QRScannerView { scannedKey in
                 apiKey = scannedKey
@@ -115,19 +93,3 @@ struct SettingsView: View {
     }
 }
 
-struct SignalStrengthView: View {
-    var strength: Double // 0.0 to 1.0
-    
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(0..<4) { index in
-                let threshold = Double(index + 1) / 4.0
-                let isFilled = strength >= threshold || (index == 0 && strength > 0)
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(isFilled ? Color.blue : Color.gray.opacity(0.3))
-                    .frame(width: 4, height: 6 + CGFloat(index * 3))
-            }
-        }
-        .frame(height: 16, alignment: .bottom)
-    }
-}

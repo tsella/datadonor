@@ -6,7 +6,6 @@ struct SyncDataPoint: Identifiable, Equatable {
     let date: Date
     let type: String
     let count: Int
-    // Using a default density of 0.8 for the bar width since it was added later
     var density: Double = 0.8
 }
 
@@ -31,12 +30,12 @@ struct DashboardView: View {
     @State private var fetchTask: Task<Void, Never>?
     @State private var lastRefreshCount: Int = 0
     
-    // Vibrant Neon Palette for Dark Mode
+    // Earthy pastel palette matching mockup
     let chartColors: [String: Color] = [
-        "Heart Rate": Color(red: 1.0, green: 0.15, blue: 0.35), // Neon Pink/Crimson
-        "Steps": Color(red: 0.0, green: 0.8, blue: 1.0),       // Electric Cyan
-        "Sleep": Color(red: 0.6, green: 0.2, blue: 1.0),       // Deep Neon Purple
-        "Workouts": Color(red: 0.1, green: 0.95, blue: 0.4)    // Neon Green
+        "Heart Rate": Color(red: 223/255.0, green: 107/255.0, blue: 83/255.0),
+        "Steps": Color(red: 103/255.0, green: 139/255.0, blue: 150/255.0),
+        "Sleep": Color(red: 35/255.0, green: 163/255.0, blue: 147/255.0),
+        "Workouts": Color(red: 210/255.0, green: 163/255.0, blue: 91/255.0)
     ]
     
     var body: some View {
@@ -45,22 +44,18 @@ struct DashboardView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Sync History")
-                        .font(.title3)
-                        .fontWeight(.bold)
-                        .foregroundColor(Color.primary.opacity(0.85))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
+                        .font(.headline)
+                        .foregroundColor(.primary)
                     
                     HStack(spacing: 6) {
                         if healthQueryManager.isSyncing {
                             ProgressView()
                                 .controlSize(.small)
-                                .tint(Color.white.opacity(0.8))
-                            Text("Sync in progress...")
+                            Text("auto-sync on")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         } else if storedLastSync > 0 {
-                            Text("Last synced: \(Date(timeIntervalSince1970: storedLastSync), style: .time)")
+                            Text("Last synced \(Date(timeIntervalSince1970: storedLastSync).formatted(date: .omitted, time: .shortened)) · auto-sync on")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         } else {
@@ -74,42 +69,11 @@ struct DashboardView: View {
                 Spacer()
                 
                 // Total Count
-                Text("\(healthQueryManager.totalRecordsSynced)")
+                Text(formatCount(healthQueryManager.totalRecordsSynced))
                     .font(.headline)
                     .fontWeight(.bold)
-                    .foregroundColor(Color.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(
-                        LinearGradient(
-                            colors: [Color(red: 0.4, green: 0.2, blue: 0.8), Color(red: 0.6, green: 0.3, blue: 0.9)],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .clipShape(Capsule())
-                    .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    .foregroundColor(Color(red: 0.04, green: 0.63, blue: 0.57)) // Teal color
             }
-            
-            // Interactive Legend & Controls
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 12) {
-                    ForEach(["Heart Rate", "Steps", "Sleep", "Workouts"], id: \.self) { type in
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(chartColors[type] ?? .gray)
-                                .frame(width: 8, height: 8)
-                            Text(type)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-                }
-            }
-            .padding(.top, -5)
             
             // Animated Chart
             Chart {
@@ -120,46 +84,48 @@ struct DashboardView: View {
                         width: .ratio(CGFloat(item.density))
                     )
                     .foregroundStyle(chartColors[item.type] ?? .gray)
-                    .cornerRadius(4)
                 }
             }
             .chartXAxis {
-                AxisMarks { _ in
-                    AxisGridLine(stroke: StrokeStyle(lineWidth: 1, dash: [4]))
-                        .foregroundStyle(Color.gray.opacity(0.15))
-                    AxisValueLabel(format: .dateTime.year().month(.abbreviated))
-                        .foregroundStyle(Color.primary.opacity(0.6))
+                AxisMarks(values: .stride(by: .year)) { value in
+                    AxisValueLabel(format: .dateTime.year())
+                        .foregroundStyle(Color.secondary)
                         .font(.caption)
                 }
             }
-            .chartYAxis {
-                AxisMarks(position: .leading) { _ in
-                    AxisGridLine(stroke: StrokeStyle(lineWidth: 1, dash: [4]))
-                        .foregroundStyle(Color.gray.opacity(0.15))
-                    AxisValueLabel()
-                        .foregroundStyle(Color.primary.opacity(0.5))
-                        .font(.caption2)
+            .chartYAxis(.hidden)
+            .chartLegend(.hidden)
+            .frame(height: 250)
+            .animation(.spring(response: 0.6, dampingFraction: 0.8), value: syncData)
+            
+            // Legend at the bottom
+            HStack(spacing: 16) {
+                ForEach(["Heart Rate", "Steps", "Sleep", "Workouts"], id: \.self) { type in
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(chartColors[type] ?? .gray)
+                            .frame(width: 8, height: 8)
+                        Text(type == "Heart Rate" ? "Heart" : type)
+                            .font(.caption)
+                            .foregroundColor(.primary)
+                    }
                 }
             }
-            .chartLegend(.hidden)
-            .frame(height: 220)
-            .animation(.spring(response: 0.6, dampingFraction: 0.8), value: syncData)
+            .padding(.top, 10)
         }
-        .padding(24)
-        .background(.ultraThinMaterial)
-        .cornerRadius(28)
-        .shadow(color: Color.black.opacity(0.05), radius: 25, x: 0, y: 15)
+        .padding(20)
+        .background(Color(uiColor: .secondarySystemGroupedBackground))
+        .cornerRadius(20)
+        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
         .onAppear {
             lastRefreshCount = healthQueryManager.totalRecordsSynced
             refreshData()
         }
         .onChange(of: healthQueryManager.totalRecordsSynced) { newTotal in
             if healthQueryManager.isSyncing {
-                // Handle case where server database was wiped, resetting the total below our last tracker
                 if newTotal < lastRefreshCount {
                     lastRefreshCount = newTotal
                 }
-                
                 if newTotal - lastRefreshCount >= 5000 {
                     lastRefreshCount = newTotal
                     refreshData()
@@ -168,7 +134,6 @@ struct DashboardView: View {
         }
         .onChange(of: healthQueryManager.isSyncing) { isSyncing in
             if !isSyncing {
-                // Refresh after sync finishes
                 lastRefreshCount = healthQueryManager.totalRecordsSynced
                 refreshData()
             }
@@ -177,6 +142,16 @@ struct DashboardView: View {
             if newURL != nil {
                 refreshData()
             }
+        }
+    }
+    
+    private func formatCount(_ count: Int) -> String {
+        if count >= 1_000_000 {
+            return String(format: "%.2fM", Double(count) / 1_000_000.0)
+        } else if count >= 1_000 {
+            return String(format: "%.1fK", Double(count) / 1_000.0)
+        } else {
+            return "\(count)"
         }
     }
     
@@ -190,7 +165,6 @@ struct DashboardView: View {
     private func fetchDashboardStats() async {
         let cacheKey = "dashboard_cache_months"
         
-        // 1. Load from cache immediately
         if let cachedData = UserDefaults.standard.data(forKey: cacheKey),
            let response = try? JSONDecoder().decode(ServerStatsResponse.self, from: cachedData) {
             await MainActor.run {
@@ -198,7 +172,6 @@ struct DashboardView: View {
             }
         }
         
-        // 2. Fetch fresh data from server
         let serverStr = !customServerURL.isEmpty ? customServerURL : serverDiscoveryManager.resolvedURL?.absoluteString ?? ""
         guard let serverURL = URL(string: serverStr) else { return }
         let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? ""

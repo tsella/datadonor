@@ -9,9 +9,9 @@ class BackgroundSyncManager {
     
     private init() {}
     
-    func registerBackgroundTasks(syncEngine: SyncEngine, networkMonitor: NetworkMonitor, healthQueryManager: HealthQueryManager, apiKey: String) {
+    func registerBackgroundTasks(syncEngine: SyncEngine, healthQueryManager: HealthQueryManager, apiKey: String) {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: syncTaskIdentifier, using: nil) { task in
-            self.handleAppRefresh(task: task as! BGAppRefreshTask, syncEngine: syncEngine, networkMonitor: networkMonitor, healthQueryManager: healthQueryManager, apiKey: apiKey)
+            self.handleAppRefresh(task: task as! BGAppRefreshTask, syncEngine: syncEngine, healthQueryManager: healthQueryManager, apiKey: apiKey)
         }
     }
     
@@ -27,7 +27,7 @@ class BackgroundSyncManager {
         }
     }
     
-    private func handleAppRefresh(task: BGAppRefreshTask, syncEngine: SyncEngine, networkMonitor: NetworkMonitor, healthQueryManager: HealthQueryManager, apiKey: String) {
+    private func handleAppRefresh(task: BGAppRefreshTask, syncEngine: SyncEngine, healthQueryManager: HealthQueryManager, apiKey: String) {
         // Reschedule for the next cycle
         scheduleAppRefresh()
         
@@ -41,7 +41,7 @@ class BackgroundSyncManager {
         Task {
             let customURLString = UserDefaults.standard.string(forKey: "customServerURL") ?? ""
             let serverURL = URL(string: customURLString) // Fallback to custom if discovery isn't available in background
-            await healthQueryManager.performSync(syncEngine: syncEngine, networkMonitor: networkMonitor, serverURL: serverURL, apiKey: apiKey)
+            await healthQueryManager.performSync(syncEngine: syncEngine, serverURL: serverURL, apiKey: apiKey)
             task.setTaskCompleted(success: true)
         }
     }
