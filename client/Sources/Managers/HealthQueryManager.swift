@@ -250,14 +250,9 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
         UserDefaults.standard.synchronize()
     }
     
-    func performSync(syncEngine: SyncEngine, networkMonitor: NetworkMonitor, serverURL: URL?, apiKey: String) async {
+    func performSync(syncEngine: SyncEngine, serverURL: URL?, apiKey: String) async {
         guard let url = serverURL else {
             DataDonorLogger.shared.log("Skipping sync: No server URL resolved.", level: .warn)
-            return
-        }
-        
-        guard networkMonitor.isConnectedToTargetSSID else {
-            DataDonorLogger.shared.log("Skipping sync: Not connected to target Wi-Fi SSID.", level: .info)
             return
         }
         

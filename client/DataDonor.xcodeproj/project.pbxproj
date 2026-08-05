@@ -23,7 +23,6 @@
 		DC18FB43A4574BBF3EE79E0C /* HealthDataPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43AA60B52B0FE33DA4F10BEE /* HealthDataPayload.swift */; };
 		F0228F882331253AC6191A19 /* DataDonorLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = B871FF1D06DC360984B8B117 /* DataDonorLogger.swift */; };
 		F3C2BB7BAAC6F69B8530607E /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 888D8220FCE0DF54E65F5D58 /* NotificationManager.swift */; };
-		F74C93FAC4FB849646D52458 /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3CD2AC04AC6DF5A5CADC915 /* NetworkMonitor.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -40,7 +39,6 @@
 		AB5214F6C8D7802B7C6AE774 /* LogViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogViewer.swift; sourceTree = "<group>"; };
 		B5A65ED0883FB0D15D811CB1 /* SyncEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncEngine.swift; sourceTree = "<group>"; };
 		B871FF1D06DC360984B8B117 /* DataDonorLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataDonorLogger.swift; sourceTree = "<group>"; };
-		D3CD2AC04AC6DF5A5CADC915 /* NetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkMonitor.swift; sourceTree = "<group>"; };
 		DA0502AA9B461C6FB7570609 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		DDC2BE44061E01864982FC3E /* HealthQueryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthQueryManager.swift; sourceTree = "<group>"; };
 		EEDABAD12BF5B43F630B560A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -88,7 +86,6 @@
 				B871FF1D06DC360984B8B117 /* DataDonorLogger.swift */,
 				DDC2BE44061E01864982FC3E /* HealthQueryManager.swift */,
 				4ACD28D0D80DD95A19E0A3DD /* HealthStoreManager.swift */,
-				D3CD2AC04AC6DF5A5CADC915 /* NetworkMonitor.swift */,
 				888D8220FCE0DF54E65F5D58 /* NotificationManager.swift */,
 				3DEC85DD5033F486CA48B51E /* ServerDiscoveryManager.swift */,
 				B5A65ED0883FB0D15D811CB1 /* SyncEngine.swift */,
@@ -192,7 +189,6 @@
 				B7F0DB00B82B875BC95F4A74 /* HealthQueryManager.swift in Sources */,
 				8A17547229C35C18E008CA3F /* HealthStoreManager.swift in Sources */,
 				337EB1F43C526BA3EAC46601 /* LogViewer.swift in Sources */,
-				F74C93FAC4FB849646D52458 /* NetworkMonitor.swift in Sources */,
 				F3C2BB7BAAC6F69B8530607E /* NotificationManager.swift in Sources */,
 				B55086198964E9FAE21AC200 /* QRScannerView.swift in Sources */,
 				3FE5E493BD7E9B0C8160E7F8 /* ServerDiscoveryManager.swift in Sources */,
