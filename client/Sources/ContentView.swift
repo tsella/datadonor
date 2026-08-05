@@ -206,6 +206,9 @@ struct ContentView: View {
                     )
                 }
             }
+            .onChange(of: healthQueryManager.isSyncing) { isSyncing in
+                UIApplication.shared.isIdleTimerDisabled = isSyncing
+            }
             .alert("New Server Discovered", isPresented: $showingApprovalAlert) {
                 Button("Approve") {
                     if let url = serverDiscoveryManager.pendingApprovalURL {
