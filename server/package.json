@@ -2,15 +2,17 @@
   "name": "server",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "app.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node app.js",
+    "test": "node --test",
     "qr": "node generate-qr.js",
+    "discover": "node discover.js",
     "rebuild-stats": "node rebuild_aggregations.js"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "Tom Sella <tsella@gmail.com>",
+  "license": "MIT",
   "type": "commonjs",
   "dependencies": {
     "bonjour-service": "^1.4.4",
