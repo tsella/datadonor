@@ -2,12 +2,11 @@ import Foundation
 import Combine
 
 class ServerDiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDelegate, NetServiceDelegate {
+    /// The server the user approved and we may talk to. Never set before approval —
+    /// anything else would leak the API key to an unapproved (possibly spoofed) host.
     @Published var activeServerURL: URL?
     @Published var pendingApprovalURL: URL?
-    
-    // Legacy support to prevent build errors immediately, though we'll remove uses of it
-    @Published var resolvedURL: URL?
-    
+
     private var browser: NetServiceBrowser
     private var resolvingServices: [NetService] = []
     
@@ -74,13 +73,12 @@ class ServerDiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
         if let url = URL(string: "https://\(cleanHost):\(port)") {
             print("[Bonjour] Constructed URL: \(url.absoluteString)")
             DispatchQueue.main.async {
-                self.resolvedURL = url // Keep for Dashboard fetch stats backward compatibility until updated
-                
                 let urlStr = url.absoluteString
                 let approvedServers = UserDefaults.standard.stringArray(forKey: "approvedServers") ?? []
-                
+
                 if approvedServers.contains(urlStr) {
                     self.activeServerURL = url
+                    ServerResolver.rememberActive(url)
                 } else {
                     self.pendingApprovalURL = url
                 }

@@ -17,6 +17,8 @@
 		807618975E0B37A859F631F6 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0502AA9B461C6FB7570609 /* ContentView.swift */; };
 		8A17547229C35C18E008CA3F /* HealthStoreManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ACD28D0D80DD95A19E0A3DD /* HealthStoreManager.swift */; };
 		9DBDDD0A4BA024F7EB218507 /* SyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A65ED0883FB0D15D811CB1 /* SyncEngine.swift */; };
+		A1B2C3D40000000000000001 /* ServerResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000011 /* ServerResolver.swift */; };
+		A1B2C3D40000000000000002 /* ServerTrustStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000012 /* ServerTrustStore.swift */; };
 		B55086198964E9FAE21AC200 /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93758C072125F4884F24FA0D /* QRScannerView.swift */; };
 		B7F0DB00B82B875BC95F4A74 /* HealthQueryManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDC2BE44061E01864982FC3E /* HealthQueryManager.swift */; };
 		CBFADF0A2575755766133D24 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EEDABAD12BF5B43F630B560A /* Assets.xcassets */; };
@@ -38,6 +40,8 @@
 		93758C072125F4884F24FA0D /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
 		AB5214F6C8D7802B7C6AE774 /* LogViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogViewer.swift; sourceTree = "<group>"; };
 		B5A65ED0883FB0D15D811CB1 /* SyncEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncEngine.swift; sourceTree = "<group>"; };
+		A1B2C3D40000000000000011 /* ServerResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerResolver.swift; sourceTree = "<group>"; };
+		A1B2C3D40000000000000012 /* ServerTrustStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerTrustStore.swift; sourceTree = "<group>"; };
 		B871FF1D06DC360984B8B117 /* DataDonorLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataDonorLogger.swift; sourceTree = "<group>"; };
 		DA0502AA9B461C6FB7570609 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		DDC2BE44061E01864982FC3E /* HealthQueryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthQueryManager.swift; sourceTree = "<group>"; };
@@ -88,6 +92,8 @@
 				4ACD28D0D80DD95A19E0A3DD /* HealthStoreManager.swift */,
 				888D8220FCE0DF54E65F5D58 /* NotificationManager.swift */,
 				3DEC85DD5033F486CA48B51E /* ServerDiscoveryManager.swift */,
+				A1B2C3D40000000000000011 /* ServerResolver.swift */,
+				A1B2C3D40000000000000012 /* ServerTrustStore.swift */,
 				B5A65ED0883FB0D15D811CB1 /* SyncEngine.swift */,
 			);
 			path = Managers;
@@ -192,6 +198,8 @@
 				F3C2BB7BAAC6F69B8530607E /* NotificationManager.swift in Sources */,
 				B55086198964E9FAE21AC200 /* QRScannerView.swift in Sources */,
 				3FE5E493BD7E9B0C8160E7F8 /* ServerDiscoveryManager.swift in Sources */,
+				A1B2C3D40000000000000001 /* ServerResolver.swift in Sources */,
+				A1B2C3D40000000000000002 /* ServerTrustStore.swift in Sources */,
 				359D2E5A6ADFDFA64193D5E8 /* SettingsView.swift in Sources */,
 				9DBDDD0A4BA024F7EB218507 /* SyncEngine.swift in Sources */,
 			);

@@ -49,7 +49,7 @@ struct ContentView: View {
                         
                         // Server Connection Card
                         VStack(spacing: 12) {
-                            if let url = (!customServerURL.isEmpty ? URL(string: customServerURL) : serverDiscoveryManager.activeServerURL) {
+                            if let url = ServerResolver.resolve(override: customServerURL, discovered: serverDiscoveryManager.activeServerURL) {
                                 HStack {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text("Connected to Server")
@@ -73,6 +73,20 @@ struct ContentView: View {
                                     Image(systemName: "checkmark.circle.fill")
                                         .font(.title2)
                                         .foregroundColor(Color(red: 0.04, green: 0.63, blue: 0.57)) // Teal checkmark
+                                }
+                            } else if ServerResolver.overrideIsInvalid(customServerURL) {
+                                HStack {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundColor(.orange)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Invalid Server URL")
+                                            .font(.headline)
+                                            .foregroundColor(.primary)
+                                        Text("Include a scheme, e.g. https://192.168.1.5:8443")
+                                            .font(.subheadline)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
                                 }
                             } else {
                                 HStack {
@@ -141,10 +155,11 @@ struct ContentView: View {
                             } else {
                                 Button(action: {
                                     Task {
-                                        let overrideURL = URL(string: customServerURL)
                                         await healthQueryManager.performSync(
                                             syncEngine: syncEngine,
-                                            serverURL: overrideURL ?? serverDiscoveryManager.activeServerURL,
+                                            serverURL: ServerResolver.resolve(
+                                                override: customServerURL,
+                                                discovered: serverDiscoveryManager.activeServerURL),
                                             apiKey: apiKey
                                         )
                                     }
@@ -181,25 +196,28 @@ struct ContentView: View {
                 }
             }
             .onChange(of: serverDiscoveryManager.activeServerURL) { newURL in
-                if newURL != nil && !healthQueryManager.isSyncing && healthStoreManager.isAuthorized {
-                    Task {
-                        let overrideURL = URL(string: customServerURL)
-                        await healthQueryManager.performSync(
-                            syncEngine: syncEngine,
-                            serverURL: overrideURL ?? newURL,
-                            apiKey: apiKey
-                        )
-                    }
+                guard newURL != nil, !healthQueryManager.isSyncing, healthStoreManager.isAuthorized,
+                      !apiKey.isEmpty else { return }
+                Task {
+                    await healthQueryManager.performSync(
+                        syncEngine: syncEngine,
+                        serverURL: ServerResolver.resolve(override: customServerURL, discovered: newURL),
+                        apiKey: apiKey
+                    )
                 }
             }
             .alert("New Server Discovered", isPresented: $showingApprovalAlert) {
                 Button("Approve") {
                     if let url = serverDiscoveryManager.pendingApprovalURL {
                         var approved = UserDefaults.standard.stringArray(forKey: "approvedServers") ?? []
-                        approved.append(url.absoluteString)
+                        if !approved.contains(url.absoluteString) {
+                            approved.append(url.absoluteString)
+                        }
                         UserDefaults.standard.set(approved, forKey: "approvedServers")
-                        
+
                         serverDiscoveryManager.activeServerURL = url
+                        // Make the server reachable from the background task too.
+                        ServerResolver.rememberActive(url)
                         serverDiscoveryManager.pendingApprovalURL = nil
                     }
                 }

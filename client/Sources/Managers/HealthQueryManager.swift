@@ -3,7 +3,7 @@ import HealthKit
 import UIKit
 
 @MainActor
-final class HealthQueryManager: ObservableObject, @unchecked Sendable {
+final class HealthQueryManager: ObservableObject {
     let healthStore = HKHealthStore()
     @Published var isSyncing = false
     @Published var totalRecordsSynced: Int = UserDefaults.standard.integer(forKey: "totalRecordsSynced")
@@ -84,13 +84,13 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
         if let quantitySample = sample as? HKQuantitySample {
             let identifier = HKQuantityTypeIdentifier(rawValue: sample.sampleType.identifier)
             let preferredUnit = unit(for: identifier)
-            let value: Double
-            if quantitySample.quantity.is(compatibleWith: preferredUnit) {
-                value = quantitySample.quantity.doubleValue(for: preferredUnit)
-            } else {
-                value = 0.0
-                DataDonorLogger.shared.log("Unit mismatch: \(sample.sampleType.identifier) sample unit \(quantitySample.quantity) is incompatible with preferred unit \(preferredUnit.unitString). Storing 0.0.", level: .warn)
+            // Skip rather than store 0.0: a fabricated zero is indistinguishable from a real
+            // measurement once it is in the database, and the anchor moves past it either way.
+            guard quantitySample.quantity.is(compatibleWith: preferredUnit) else {
+                DataDonorLogger.shared.log("Unit mismatch: \(sample.sampleType.identifier) sample unit \(quantitySample.quantity) is incompatible with preferred unit \(preferredUnit.unitString). Skipping sample.", level: .warn)
+                return nil
             }
+            let value = quantitySample.quantity.doubleValue(for: preferredUnit)
             return HealthDataPoint(type: sample.sampleType.identifier, value: .double(value), unit: preferredUnit.unitString, startDate: formatter.string(from: sample.startDate), endDate: formatter.string(from: sample.endDate), source: sample.sourceRevision.source.name, uuid: sample.uuid.uuidString, metadata: sampleMetadata)
         } else if let categorySample = sample as? HKCategorySample {
             return HealthDataPoint(type: sample.sampleType.identifier, value: .string("\(categorySample.value)"), unit: nil, startDate: formatter.string(from: sample.startDate), endDate: formatter.string(from: sample.endDate), source: sample.sourceRevision.source.name, uuid: sample.uuid.uuidString, metadata: sampleMetadata)
@@ -159,10 +159,14 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
         return [.workoutType()]
     }
     
-    private func exhaustQuery(for sampleType: HKSampleType, syncEngine: SyncEngine, serverURL: URL, apiKey: String, limit: Int = 1000) async {
+    /// Drains a sample type, uploading in batches. Returns false if a batch failed to
+    /// upload, in which case the anchor was left untouched for a later retry.
+    @discardableResult
+    private func exhaustQuery(for sampleType: HKSampleType, syncEngine: SyncEngine, serverURL: URL, apiKey: String, limit: Int = 1000) async -> Bool {
         var anchor = getAnchor(for: sampleType.identifier)
         var hasMoreData = true
-        
+        var syncFailed = false
+
         while hasMoreData {
             if isCancelled { break }
             let (fetchedSamples, fetchedDeletedObjects, newAnchor) = await withCheckedContinuation { continuation in
@@ -178,7 +182,15 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
             if !samplesToProcess.isEmpty || !deletedToProcess.isEmpty {
                 let dataPoints = samplesToProcess.compactMap { self.mapSample($0) }
                 let deletedUuids = deletedToProcess.compactMap { $0.uuid.uuidString }
-                
+
+                // Every sample in this batch was unmappable and there is nothing to delete.
+                // Skip the round trip, but still advance past them so we don't spin here.
+                if dataPoints.isEmpty && deletedUuids.isEmpty {
+                    self.saveAnchor(newAnchor, for: sampleType.identifier)
+                    anchor = newAnchor
+                    continue
+                }
+
                 let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? "unknown"
                 
                 var base64Anchor: String? = nil
@@ -197,36 +209,56 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
                 do {
                     let encoder = JSONEncoder()
                     let payloadData = try encoder.encode(payload)
+                    // Returns only once the server has acknowledged the batch with a 2xx.
+                    // Anything else throws, so the anchor below is never advanced past
+                    // records the server did not store.
                     try await syncEngine.sync(payload: payloadData, serverURL: serverURL, apiKey: apiKey)
-                    
+
                     self.saveAnchor(newAnchor, for: sampleType.identifier)
                     anchor = newAnchor
-                    DataDonorLogger.shared.log("Synced \(samplesToProcess.count) records for \(sampleType.identifier)", level: .debug)
-                    
+                    DataDonorLogger.shared.log("Synced \(dataPoints.count) records for \(sampleType.identifier)", level: .debug)
+
                     // Update stats for DashboardView
                     let now = Date()
                     let shouldUpdateTimestamp = now.timeIntervalSince(self.lastUIUpdateTime) >= 5.0
-                    
-                    let recordsCount = samplesToProcess.count
-                    DispatchQueue.main.async {
-                        self.totalRecordsSynced += recordsCount
-                    }
-                    UserDefaults.standard.set(UserDefaults.standard.integer(forKey: "totalRecordsSynced") + recordsCount, forKey: "totalRecordsSynced")
-                    
+
+                    // Count what we actually sent, not what HealthKit handed us: mapSample
+                    // drops samples it cannot represent.
+                    self.addSyncedRecords(dataPoints.count)
+
                     if shouldUpdateTimestamp {
                         UserDefaults.standard.set(now.timeIntervalSince1970, forKey: "lastSyncTimestamp")
                         self.lastUIUpdateTime = now
                     }
                 } catch {
-                    DataDonorLogger.shared.log("Failed to encode/sync \(sampleType.identifier): \(error)", level: .warn)
+                    // Stop this type here. The anchor stays where it is, so the next sync
+                    // retries this exact batch instead of silently skipping it.
+                    DataDonorLogger.shared.log("Failed to sync \(sampleType.identifier): \(error.localizedDescription). Anchor not advanced; will retry next sync.", level: .error)
+                    NotificationManager.shared.reportSyncFailure(
+                        type: sampleType.identifier, error: error)
                     hasMoreData = false
+                    syncFailed = true
                 }
             } else {
                 hasMoreData = false
             }
         }
+        return !syncFailed
     }
-    
+
+    /// Keeps the published count and its persisted copy in lockstep on the main actor.
+    /// These used to be written from two threads, so they drifted apart and the drift
+    /// survived relaunch because the property is seeded from UserDefaults.
+    private func addSyncedRecords(_ count: Int) {
+        totalRecordsSynced += count
+        UserDefaults.standard.set(totalRecordsSynced, forKey: "totalRecordsSynced")
+    }
+
+    private func setSyncedRecords(_ count: Int) {
+        totalRecordsSynced = count
+        UserDefaults.standard.set(count, forKey: "totalRecordsSynced")
+    }
+
     private func resetAllAnchors() {
         for key in UserDefaults.standard.dictionaryRepresentation().keys {
             if key.hasPrefix("anchor_") {
@@ -234,11 +266,7 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
             }
         }
         UserDefaults.standard.set(0.0, forKey: "lastSyncTimestamp")
-        UserDefaults.standard.set(0, forKey: "totalRecordsSynced")
-        DispatchQueue.main.async {
-            self.totalRecordsSynced = 0
-        }
-        UserDefaults.standard.synchronize()
+        setSyncedRecords(0)
     }
     
     private func wipeLocalAnchorsOnly() {
@@ -256,30 +284,28 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
             return
         }
         
+        // Guard against overlapping runs: discovery, the manual button and the background
+        // task can all fire performSync, and concurrent runs corrupt the shared anchors.
+        guard !isSyncing else {
+            DataDonorLogger.shared.log("Skipping sync: another sync is already running.", level: .info)
+            return
+        }
+
         DataDonorLogger.shared.log("Starting health data extraction loop.", level: .info)
-        
-        DispatchQueue.main.async {
-            self.isSyncing = true
-        }
-        self.isCancelled = false
-        
-        defer {
-            DispatchQueue.main.async {
-                self.isSyncing = false
-            }
-        }
-        
+
+        isSyncing = true
+        isCancelled = false
+
+        defer { isSyncing = false }
+
         let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? "unknown"
         do {
             if let checkpointData = try await syncEngine.fetchServerCheckpoint(serverURL: url, apiKey: apiKey, deviceId: deviceId) {
                 let serverAnchors = checkpointData.checkpoints
                 
                 // Align local record count with server's actual count
-                DispatchQueue.main.async {
-                    self.totalRecordsSynced = checkpointData.totalRecords
-                }
-                UserDefaults.standard.set(checkpointData.totalRecords, forKey: "totalRecordsSynced")
-                
+                setSyncedRecords(checkpointData.totalRecords)
+
                 if serverAnchors.isEmpty {
                     DataDonorLogger.shared.log("Server has no data for device. Resetting local anchors to force full resync.", level: .info)
                     self.resetAllAnchors()
@@ -291,7 +317,6 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
                             UserDefaults.standard.set(data, forKey: "anchor_\(dataType)")
                         }
                     }
-                    UserDefaults.standard.synchronize()
                 }
             } else {
                 DataDonorLogger.shared.log("Failed to fetch server checkpoints (nil response). Proceeding with local state.", level: .warn)
@@ -305,18 +330,29 @@ final class HealthQueryManager: ObservableObject, @unchecked Sendable {
         let allWorkouts = getAllSupportedWorkoutTypes()
         let allTypes: [HKSampleType] = allQuantities + allCategories + allWorkouts
         
+        var failedTypes: [String] = []
         for sampleType in allTypes {
             if isCancelled {
                 DataDonorLogger.shared.log("Sync was cancelled by user.", level: .info)
                 break
             }
-            await exhaustQuery(for: sampleType, syncEngine: syncEngine, serverURL: url, apiKey: apiKey)
+            let ok = await exhaustQuery(for: sampleType, syncEngine: syncEngine, serverURL: url, apiKey: apiKey)
+            if !ok { failedTypes.append(sampleType.identifier) }
         }
-        
+
         // Final timestamp update
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "lastSyncTimestamp")
         self.lastUIUpdateTime = Date()
-        
-        DataDonorLogger.shared.log("Completed health data extraction loop.", level: .info)
+
+        if failedTypes.isEmpty {
+            DataDonorLogger.shared.log("Completed health data extraction loop.", level: .info)
+        } else {
+            // Anchors for these types were left in place, so the next run retries them.
+            DataDonorLogger.shared.log(
+                "Completed extraction loop with \(failedTypes.count) failed type(s): \(failedTypes.joined(separator: ", ")). These will retry on the next sync.",
+                level: .warn)
+            NotificationManager.shared.sendSyncErrorNotification(
+                message: "\(failedTypes.count) data type(s) failed to upload and will retry on the next sync.")
+        }
     }
 }
