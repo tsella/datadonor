@@ -19,6 +19,12 @@ async function setupDatabase() {
     
     // Enable WAL mode for better concurrency and performance
     await db.exec('PRAGMA journal_mode = WAL');
+    // NORMAL is the standard companion to WAL: it drops the per-commit fsync that FULL
+    // forces, which dominates ingest cost on large batched syncs. The durability window
+    // it opens is loss of the most recent commits on an OS crash or power cut — not
+    // corruption, and not on a process crash. Worth it here; the client re-sends anything
+    // whose anchor did not advance.
+    await db.exec('PRAGMA synchronous = NORMAL');
     
     logger.info('Running database migrations...');
     
