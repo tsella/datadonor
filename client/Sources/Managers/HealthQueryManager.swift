@@ -162,7 +162,10 @@ final class HealthQueryManager: ObservableObject {
     /// Drains a sample type, uploading in batches. Returns false if a batch failed to
     /// upload, in which case the anchor was left untouched for a later retry.
     @discardableResult
-    private func exhaustQuery(for sampleType: HKSampleType, syncEngine: SyncEngine, serverURL: URL, apiKey: String, limit: Int = 1000) async -> Bool {
+    /// `limit` is the HealthKit page size *and* the upload batch size. At 5000 a typical
+    /// batch encodes to a few MB against the server's 50MB body limit, so the headroom is
+    /// large; the win is cutting round trips ~5x on a multi-million-record backfill.
+    private func exhaustQuery(for sampleType: HKSampleType, syncEngine: SyncEngine, serverURL: URL, apiKey: String, limit: Int = 5000) async -> Bool {
         var anchor = getAnchor(for: sampleType.identifier)
         var hasMoreData = true
         var syncFailed = false
@@ -209,10 +212,12 @@ final class HealthQueryManager: ObservableObject {
                 do {
                     let encoder = JSONEncoder()
                     let payloadData = try encoder.encode(payload)
-                    // Returns only once the server has acknowledged the batch with a 2xx.
-                    // Anything else throws, so the anchor below is never advanced past
-                    // records the server did not store.
-                    try await syncEngine.sync(payload: payloadData, serverURL: serverURL, apiKey: apiKey)
+                    // Returns only once the server has stored the batch — including the case
+                    // where it acknowledged the upload while the app was killed. Anything
+                    // else throws, so the anchor below is never advanced past records the
+                    // server did not store.
+                    try await syncEngine.sync(
+                        payload: payloadData, serverURL: serverURL, apiKey: apiKey)
 
                     self.saveAnchor(newAnchor, for: sampleType.identifier)
                     anchor = newAnchor
