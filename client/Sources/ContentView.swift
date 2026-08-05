@@ -58,7 +58,7 @@ struct ContentView: View {
                                         
                                         // Extract host and port
                                         if let host = url.host, let port = url.port {
-                                            Text("\(host):\(port)")
+                                            Text("\(host):\(String(port))")
                                                 .font(.subheadline)
                                                 .foregroundColor(.secondary)
                                         } else {
