@@ -18,7 +18,10 @@ struct LogViewer: View {
     @State private var showError = true
     
     var body: some View {
-        VStack(spacing: 0) {
+        // Filter once per evaluation. The list is the whole log history and this runs on
+        // every keystroke in the search field, so the scan is not free.
+        let filtered = filteredEntries
+        return VStack(spacing: 0) {
             // Filters
             HStack(spacing: 15) {
                 Toggle("DEBUG", isOn: $showDebug)
@@ -41,13 +44,13 @@ struct LogViewer: View {
             
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 6) {
-                    if filteredEntries.isEmpty {
+                    if filtered.isEmpty {
                         Text("No logs found.")
                             .foregroundColor(.secondary)
                             .padding()
                     }
                     
-                    ForEach(filteredEntries) { entry in
+                    ForEach(filtered) { entry in
                         HStack(alignment: .top) {
                             Text(entry.level.rawValue)
                                 .font(.system(.caption2, design: .monospaced).bold())
