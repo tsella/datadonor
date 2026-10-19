@@ -5,7 +5,7 @@
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
-    "test": "node --test",
+    "test": "node --test test/*.test.js",
     "qr": "node generate-qr.js",
     "discover": "node discover.js",
     "rebuild-stats": "node rebuild_aggregations.js"

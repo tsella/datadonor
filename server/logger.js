@@ -1,5 +1,6 @@
 const winston = require('winston');
 const DailyRotateFile = require('winston-daily-rotate-file');
+const fs = require('fs');
 const path = require('path');
 const { loadConfig } = require('./configManager');
 
@@ -15,8 +16,11 @@ const logFormat = winston.format.combine(
     })
 );
 
+const LOG_DIR = process.env.DATADONOR_LOG_DIR || path.join(__dirname, 'logs');
+fs.mkdirSync(LOG_DIR, { recursive: true });
+
 const transport = new DailyRotateFile({
-    filename: path.join(__dirname, 'logs', 'datadonor-%DATE%.log'),
+    filename: path.join(LOG_DIR, 'datadonor-%DATE%.log'),
     datePattern: 'YYYY-MM-DD',
     zippedArchive: true,
     maxSize: '20m',

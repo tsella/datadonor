@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const CONFIG_PATH = path.join(__dirname, 'config.json');
+const CONFIG_PATH = process.env.DATADONOR_CONFIG || path.join(__dirname, 'config.json');
 
 const DEFAULT_CONFIG = {
     server: {

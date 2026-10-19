@@ -47,6 +47,49 @@ function isValidApiKey(token) {
     return crypto.timingSafeEqual(candidate, API_KEY_BUFFER);
 }
 
+/**
+ * Analytics buckets for /api/v1/health-sync/stats.
+ *
+ * An explicit table, not substring matching. The previous version tested
+ * `includes('HeartRate')` first, then 'Step'/'Walking'/'Flights', and worked only
+ * because of that order: a new type whose name contains two of those words lands
+ * in whichever check comes first. A type absent here is 'Other', which the route
+ * drops from the response instead of attributing it to a bucket.
+ */
+const TYPE_BUCKETS = {
+    HKQuantityTypeIdentifierHeartRate: 'Heart Rate',
+    HKQuantityTypeIdentifierRestingHeartRate: 'Heart Rate',
+    HKQuantityTypeIdentifierWalkingHeartRateAverage: 'Heart Rate',
+    HKQuantityTypeIdentifierHeartRateVariabilitySDNN: 'Heart Rate',
+    HKQuantityTypeIdentifierHeartRateRecoveryOneMinute: 'Heart Rate',
+    HKQuantityTypeIdentifierStepCount: 'Steps',
+    HKQuantityTypeIdentifierDistanceWalkingRunning: 'Steps',
+    HKQuantityTypeIdentifierWalkingSpeed: 'Steps',
+    HKQuantityTypeIdentifierWalkingStepLength: 'Steps',
+    HKQuantityTypeIdentifierWalkingAsymmetryPercentage: 'Steps',
+    HKQuantityTypeIdentifierWalkingDoubleSupportPercentage: 'Steps',
+    HKQuantityTypeIdentifierAppleWalkingSteadiness: 'Steps',
+    HKQuantityTypeIdentifierFlightsClimbed: 'Steps',
+    HKCategoryTypeIdentifierSleepAnalysis: 'Sleep',
+    HKQuantityTypeIdentifierRespiratoryRate: 'Sleep',
+    HKQuantityTypeIdentifierAppleSleepingBreathingDisturbances: 'Sleep',
+    HKWorkoutTypeIdentifier: 'Workouts',
+    HKQuantityTypeIdentifierAppleExerciseTime: 'Workouts',
+    HKQuantityTypeIdentifierActiveEnergyBurned: 'Workouts',
+    HKQuantityTypeIdentifierBasalEnergyBurned: 'Workouts',
+    HKQuantityTypeIdentifierDistanceCycling: 'Workouts',
+    HKQuantityTypeIdentifierDistanceSwimming: 'Workouts',
+    HKQuantityTypeIdentifierDistanceDownhillSnowSports: 'Workouts',
+    HKQuantityTypeIdentifierSwimmingStrokeCount: 'Workouts',
+    HKQuantityTypeIdentifierPhysicalEffort: 'Workouts',
+    HKQuantityTypeIdentifierWorkoutEffortScore: 'Workouts',
+    HKQuantityTypeIdentifierEstimatedWorkoutEffortScore: 'Workouts',
+};
+
+function bucketForType(type) {
+    return TYPE_BUCKETS[type] || 'Other';
+}
+
 // Middleware: API Key Authentication
 fastify.addHook('preHandler', (request, reply, done) => {
     const authHeader = request.headers.authorization;
@@ -67,8 +110,10 @@ fastify.addHook('preHandler', (request, reply, done) => {
 // only handles plain text, hence an explicit parser keyed off Content-Encoding.
 //
 // The size guard applies to the *decompressed* body: bodyLimit bounds what arrives on the
-// wire, which a compressed payload can vastly exceed once expanded.
-const MAX_DECOMPRESSED_BYTES = 200 * 1024 * 1024;
+// wire, which a compressed payload can vastly exceed once expanded. Overridable from config
+// so a test can prove the guard rejects a small bomb instead of allocating 200 MB.
+const MAX_DECOMPRESSED_BYTES =
+    (config.limits && config.limits.maxDecompressedBytes) || 200 * 1024 * 1024;
 
 fastify.addContentTypeParser(
     'application/json',
@@ -393,13 +438,7 @@ fastify.get('/api/v1/health-sync/stats', async (request, reply) => {
         const rows = await db.all(query, deviceId);
         
         // Map raw identifiers to UI Buckets
-        const mapTypeToBucket = (type) => {
-            if (type.includes('HeartRate') || type.includes('SDNN')) return 'Heart Rate';
-            if (type.includes('Step') || type.includes('Walking') || type.includes('Flights')) return 'Steps';
-            if (type.includes('Sleep') || type.includes('Respiratory')) return 'Sleep';
-            if (type.includes('Exercise') || type.includes('Energy') || type.includes('Distance') || type.includes('Swimming') || type.includes('HKWorkout')) return 'Workouts';
-            return 'Other';
-        };
+        const mapTypeToBucket = (type) => bucketForType(type);
 
         const aggregated = {};
         for (const row of rows) {
