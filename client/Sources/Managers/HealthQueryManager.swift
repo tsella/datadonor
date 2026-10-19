@@ -174,11 +174,22 @@ final class HealthQueryManager: ObservableObject {
 
         while hasMoreData {
             if isCancelled { break }
-            let (fetchedSamples, fetchedDeletedObjects, newAnchor) = await withCheckedContinuation { continuation in
+            let (fetchedSamples, fetchedDeletedObjects, newAnchor, queryError) = await withCheckedContinuation { continuation in
                 let query = HKAnchoredObjectQuery(type: sampleType, predicate: nil, anchor: anchor, limit: limit) { (query, samples, deletedObjects, returnedAnchor, error) in
-                    continuation.resume(returning: (samples, deletedObjects, returnedAnchor))
+                    continuation.resume(returning: (samples, deletedObjects, returnedAnchor, error))
                 }
                 self.healthStore.execute(query)
+            }
+
+            // A failed read used to look like an empty page: the anchor advanced and the
+            // run counted as clean. Treat it as a failure so the anchor stays put and the
+            // next run retries this range.
+            if let queryError {
+                DataDonorLogger.shared.log(
+                    "HealthKit read failed for \(sampleType.identifier): \(queryError.localizedDescription)",
+                    level: .error)
+                syncFailed = true
+                break
             }
             
             let samplesToProcess = fetchedSamples ?? []
