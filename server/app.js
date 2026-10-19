@@ -119,9 +119,9 @@ fastify.addContentTypeParser(
     'application/json',
     { parseAs: 'buffer' },
     function (request, body, done) {
-        const encoding = (request.headers['content-encoding'] || '').toLowerCase();
+        const encoding = (request.headers['content-encoding'] || 'identity').toLowerCase().trim();
 
-        if (encoding !== 'gzip') {
+        if (encoding === 'identity' || encoding === '') {
             try {
                 done(null, JSON.parse(body.toString('utf8')));
             } catch (err) {
@@ -129,6 +129,12 @@ fastify.addContentTypeParser(
                 done(err);
             }
             return;
+        }
+
+        if (encoding !== 'gzip') {
+            const err = new Error(`Unsupported Content-Encoding: ${encoding}`);
+            err.statusCode = 415;
+            return done(err);
         }
 
         zlib.gunzip(body, { maxOutputLength: MAX_DECOMPRESSED_BYTES }, (err, inflated) => {
@@ -162,7 +168,13 @@ fastify.get('/api/v1/health-sync/checkpoint', async (request, reply) => {
     try {
         const db = await getDb();
         const rows = await db.all('SELECT data_type, anchor FROM checkpoints WHERE device_id = ?', deviceId);
-        const countRow = await db.get('SELECT COUNT(*) as count FROM health_metrics WHERE device_id = ?', deviceId);
+        // Sum daily_sync_stats via its (device_id, ...) primary-key index instead of
+        // running COUNT(*) on health_metrics (which has no device_id index and scans
+        // millions of rows).
+        const countRow = await db.get(
+            'SELECT COALESCE(SUM(record_count), 0) as count FROM daily_sync_stats WHERE device_id = ?',
+            deviceId
+        );
         const totalRecords = countRow ? countRow.count : 0;
         
         const checkpoints = {};
@@ -197,6 +209,8 @@ function enqueueWrite(work) {
     return result.finally(() => { queueDepth -= 1; });
 }
 
+const ISO_DATE_PREFIX_RE = /^\d{4}-\d{2}-\d{2}T/;
+
 fastify.post('/api/v1/health-sync/post', async (request, reply) => {
     const { device_id, data, anchors, deleted_uuids } = request.body || {};
 
@@ -204,20 +218,37 @@ fastify.post('/api/v1/health-sync/post', async (request, reply) => {
         return reply.status(400).send({ error: 'Invalid payload schema' });
     }
 
-    // Every record must carry a uuid. SQLite treats NULLs as distinct in a UNIQUE index,
-    // so ON CONFLICT(uuid) silently fails to dedupe them and re-syncs pile up duplicates.
-    const missingUuid = data.findIndex((m) => !m || typeof m.uuid !== 'string' || m.uuid.length === 0);
-    if (missingUuid !== -1) {
-        return reply.status(400).send({
-            error: `Every metric requires a non-empty uuid (index ${missingUuid} is missing one)`
-        });
-    }
-
-    const invalidDate = data.findIndex((m) => typeof m.start_date !== 'string' || !m.start_date.includes('T'));
-    if (invalidDate !== -1) {
-        return reply.status(400).send({
-            error: `Metric at index ${invalidDate} has a missing or malformed start_date`
-        });
+    // Validate all required fields in a single pass. Every record must carry a uuid
+    // (SQLite treats NULLs as distinct in a UNIQUE index, so ON CONFLICT(uuid) silently
+    // fails to dedupe them), an ISO start_date (for 10-char YYYY-MM-DD bucketing), and
+    // non-null type/end_date/value (to avoid NOT NULL 500s or storing literal "undefined").
+    for (let i = 0; i < data.length; i += 1) {
+        const m = data[i];
+        if (!m || typeof m.uuid !== 'string' || m.uuid.length === 0) {
+            return reply.status(400).send({
+                error: `Every metric requires a non-empty uuid (index ${i} is missing one)`
+            });
+        }
+        if (typeof m.type !== 'string' || m.type.length === 0) {
+            return reply.status(400).send({
+                error: `Metric at index ${i} has a missing or malformed type`
+            });
+        }
+        if (typeof m.start_date !== 'string' || !ISO_DATE_PREFIX_RE.test(m.start_date)) {
+            return reply.status(400).send({
+                error: `Metric at index ${i} has a missing or malformed start_date`
+            });
+        }
+        if (typeof m.end_date !== 'string' || m.end_date.length === 0) {
+            return reply.status(400).send({
+                error: `Metric at index ${i} has a missing or malformed end_date`
+            });
+        }
+        if (m.value === undefined || m.value === null) {
+            return reply.status(400).send({
+                error: `Metric at index ${i} has a missing value`
+            });
+        }
     }
 
     try {
@@ -233,16 +264,20 @@ fastify.post('/api/v1/health-sync/post', async (request, reply) => {
     }
 });
 
+const knownDevices = new Set();
+
 async function ingestPayload({ device_id, data, anchors, deleted_uuids }) {
     const db = await getDb();
-
-    // Register device if not exists
-    await db.run('INSERT OR IGNORE INTO devices (device_id, name) VALUES (?, ?)', [device_id, 'Unknown iOS Device']);
 
     await db.run('BEGIN IMMEDIATE TRANSACTION');
     let inTransaction = true;
 
     try {
+        // Register device inside the write transaction, skipping the statement once known.
+        if (!knownDevices.has(device_id)) {
+            await db.run('INSERT OR IGNORE INTO devices (device_id, name) VALUES (?, ?)', [device_id, 'Unknown iOS Device']);
+        }
+
         // Count only rows that were actually inserted. Counting payload length instead
         // permanently inflates the stats whenever a payload is retried or re-sent, since
         // the insert is idempotent but the stats UPSERT below is additive.
@@ -250,47 +285,30 @@ async function ingestPayload({ device_id, data, anchors, deleted_uuids }) {
         let inserted = 0;
         let duplicates = 0;
 
-        // Insert in multi-row chunks rather than one statement execution per record.
-        // A 5000-record batch was 5000 sequential driver round trips; it is now ~10.
-        //
-        // Chunk size is bounded by SQLITE_MAX_VARIABLE_NUMBER (999 on older builds), and
-        // each row binds 9 parameters — 100 rows = 900 placeholders, safely under it.
-        const COLUMNS_PER_ROW = 9;
-        const CHUNK_ROWS = 100;
+        // Drop duplicates within the payload once upfront so chunks only carry unique UUIDs.
+        const seen = new Set();
+        const uniqueData = [];
+        for (const metric of data) {
+            if (seen.has(metric.uuid)) {
+                duplicates += 1;
+                continue;
+            }
+            seen.add(metric.uuid);
+            uniqueData.push(metric);
+        }
 
-        // `ON CONFLICT(uuid) DO NOTHING` would resolve duplicates on its own, but `changes`
-        // is a single total per chunk: it says how many rows landed, never *which* ones.
-        // `daily_sync_stats` needs per-row identity to bucket by date and type, so a cheap
-        // index-only probe of the uuids up front buys exact stats. Measured at ~3ms of a
-        // ~17ms 5000-row batch — these hit the same UNIQUE index the INSERT walks anyway.
+        // Insert in multi-row chunks using `ON CONFLICT(uuid) DO NOTHING RETURNING` so SQLite
+        // resolves duplicates and returns the exact inserted (data_type, date_bucket) pairs
+        // in a single B-tree pass, without a separate SELECT pre-probe per chunk.
+        // 500 rows * 9 columns = 4500 bind parameters (well under SQLite 3.32+'s 32766 limit).
+        const COLUMNS_PER_ROW = 9;
+        const CHUNK_ROWS = 500;
         const rowPlaceholder = `(${new Array(COLUMNS_PER_ROW).fill('?').join(',')})`;
 
-        for (let offset = 0; offset < data.length; offset += CHUNK_ROWS) {
-            const chunk = data.slice(offset, offset + CHUNK_ROWS);
-
-            const existingRows = await db.all(
-                `SELECT uuid FROM health_metrics WHERE uuid IN (${chunk.map(() => '?').join(',')})`,
-                chunk.map((m) => m.uuid)
-            );
-            const existing = new Set(existingRows.map((r) => r.uuid));
-
-            // Also drop duplicates *within* the payload. The INSERT tolerates them, but
-            // counting both copies would double-bump the daily buckets for one stored row.
-            const seen = new Set();
-            const fresh = [];
-            for (const metric of chunk) {
-                if (existing.has(metric.uuid) || seen.has(metric.uuid)) {
-                    duplicates += 1;
-                    continue;
-                }
-                seen.add(metric.uuid);
-                fresh.push(metric);
-            }
-
-            if (fresh.length === 0) continue;
-
+        for (let offset = 0; offset < uniqueData.length; offset += CHUNK_ROWS) {
+            const chunk = uniqueData.slice(offset, offset + CHUNK_ROWS);
             const values = [];
-            for (const metric of fresh) {
+            for (const metric of chunk) {
                 values.push(
                     device_id,
                     metric.type,
@@ -304,88 +322,107 @@ async function ingestPayload({ device_id, data, anchors, deleted_uuids }) {
                 );
             }
 
-            const res = await db.run(
+            const insertedRows = await db.all(
                 `INSERT INTO health_metrics
                     (device_id, data_type, start_date, end_date, value, unit, source, uuid, metadata)
-                 VALUES ${new Array(fresh.length).fill(rowPlaceholder).join(',')}
-                 ON CONFLICT(uuid) DO NOTHING`,
+                 VALUES ${new Array(chunk.length).fill(rowPlaceholder).join(',')}
+                 ON CONFLICT(uuid) DO NOTHING
+                 RETURNING data_type, substr(start_date, 1, 10) AS date_bucket`,
                 values
             );
 
-            const chunkInserted = res.changes;
-            inserted += chunkInserted;
+            inserted += insertedRows.length;
+            duplicates += chunk.length - insertedRows.length;
 
-            if (chunkInserted === fresh.length) {
-                for (const metric of fresh) {
-                    const dateStr = metric.start_date.split('T')[0];
-                    if (!dailyCounts[dateStr]) dailyCounts[dateStr] = {};
-                    dailyCounts[dateStr][metric.type] = (dailyCounts[dateStr][metric.type] || 0) + 1;
-                }
-            } else {
-                // Writes are serialized (enqueueWrite + BEGIN IMMEDIATE), so the pre-check
-                // should never be stale. If it somehow is, prefer a visible gap in the
-                // dashboard over silent permanent inflation of an additive table.
-                duplicates += fresh.length - chunkInserted;
-                logger.warn(
-                    `Chunk insert reported ${chunkInserted}/${fresh.length} rows; skipping ` +
-                    `daily_sync_stats update for this chunk to avoid drift. Run rebuild-stats.`);
+            for (const row of insertedRows) {
+                if (!dailyCounts[row.date_bucket]) dailyCounts[row.date_bucket] = {};
+                dailyCounts[row.date_bucket][row.data_type] =
+                    (dailyCounts[row.date_bucket][row.data_type] || 0) + 1;
             }
         }
 
-        // Handle deletions. Scoped by device_id so a payload cannot delete rows belonging
-        // to another device.
+        // Handle deletions in chunks. Scoped by device_id so a payload cannot delete rows
+        // belonging to another device, and RETURNING gives the exact buckets to decrement
+        // in daily_sync_stats.
         let deleted = 0;
+        const deletedCounts = {};
         if (Array.isArray(deleted_uuids) && deleted_uuids.length > 0) {
-            const deleteStmt = await db.prepare(
-                `DELETE FROM health_metrics WHERE uuid = ? AND device_id = ?`);
-            try {
-                for (const uuid of deleted_uuids) {
-                    if (typeof uuid !== 'string' || !uuid) continue;
-                    const res = await deleteStmt.run(uuid, device_id);
-                    if (res && res.changes > 0) deleted += res.changes;
+            const validUuids = deleted_uuids.filter((u) => typeof u === 'string' && u.length > 0);
+            const DELETE_CHUNK = 500;
+            for (let offset = 0; offset < validUuids.length; offset += DELETE_CHUNK) {
+                const chunk = validUuids.slice(offset, offset + DELETE_CHUNK);
+                const deletedRows = await db.all(
+                    `DELETE FROM health_metrics
+                      WHERE device_id = ? AND uuid IN (${new Array(chunk.length).fill('?').join(',')})
+                     RETURNING data_type, substr(start_date, 1, 10) AS date_bucket`,
+                    [device_id, ...chunk]
+                );
+                deleted += deletedRows.length;
+                for (const row of deletedRows) {
+                    if (!deletedCounts[row.date_bucket]) deletedCounts[row.date_bucket] = {};
+                    deletedCounts[row.date_bucket][row.data_type] =
+                        (deletedCounts[row.date_bucket][row.data_type] || 0) + 1;
                 }
-            } finally {
-                await deleteStmt.finalize();
             }
         }
 
-        const statsStmt = await db.prepare(`
-            INSERT INTO daily_sync_stats (device_id, date_bucket, data_type, record_count)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(device_id, date_bucket, data_type)
-            DO UPDATE SET record_count = record_count + excluded.record_count
-        `);
-        try {
-            for (const [dateBucket, types] of Object.entries(dailyCounts)) {
-                for (const [type, count] of Object.entries(types)) {
-                    await statsStmt.run(device_id, dateBucket, type, count);
-                }
+        // Batch-upsert positive daily_sync_stats increments.
+        const statsValues = [];
+        for (const [dateBucket, types] of Object.entries(dailyCounts)) {
+            for (const [type, count] of Object.entries(types)) {
+                statsValues.push(device_id, dateBucket, type, count);
             }
-        } finally {
-            await statsStmt.finalize();
+        }
+        const STATS_CHUNK_PARAMS = 500 * 4;
+        for (let offset = 0; offset < statsValues.length; offset += STATS_CHUNK_PARAMS) {
+            const chunk = statsValues.slice(offset, offset + STATS_CHUNK_PARAMS);
+            const rowCount = chunk.length / 4;
+            await db.run(
+                `INSERT INTO daily_sync_stats (device_id, date_bucket, data_type, record_count)
+                 VALUES ${new Array(rowCount).fill('(?,?,?,?)').join(',')}
+                 ON CONFLICT(device_id, date_bucket, data_type)
+                 DO UPDATE SET record_count = record_count + excluded.record_count`,
+                chunk
+            );
         }
 
-        // Update Sync Checkpoints
+        // Decrement daily_sync_stats for any deleted records.
+        for (const [dateBucket, types] of Object.entries(deletedCounts)) {
+            for (const [type, count] of Object.entries(types)) {
+                await db.run(
+                    `UPDATE daily_sync_stats
+                        SET record_count = MAX(0, record_count - ?)
+                      WHERE device_id = ? AND date_bucket = ? AND data_type = ?`,
+                    [count, device_id, dateBucket, type]
+                );
+            }
+        }
+
+        // Batch-upsert Sync Checkpoints.
         if (anchors && typeof anchors === 'object') {
-            const anchorStmt = await db.prepare(`
-                INSERT INTO checkpoints (device_id, data_type, anchor)
-                VALUES (?, ?, ?)
-                ON CONFLICT(device_id, data_type)
-                DO UPDATE SET anchor = excluded.anchor, updated_at = CURRENT_TIMESTAMP
-            `);
-            try {
-                for (const [dataType, anchorValue] of Object.entries(anchors)) {
-                    if (anchorValue) {
-                        await anchorStmt.run(device_id, dataType, anchorValue);
-                    }
+            const anchorValues = [];
+            for (const [dataType, anchorValue] of Object.entries(anchors)) {
+                if (anchorValue) {
+                    anchorValues.push(device_id, dataType, anchorValue);
                 }
-            } finally {
-                await anchorStmt.finalize();
+            }
+            const ANCHOR_CHUNK_PARAMS = 500 * 3;
+            for (let offset = 0; offset < anchorValues.length; offset += ANCHOR_CHUNK_PARAMS) {
+                const chunk = anchorValues.slice(offset, offset + ANCHOR_CHUNK_PARAMS);
+                const rowCount = chunk.length / 3;
+                await db.run(
+                    `INSERT INTO checkpoints (device_id, data_type, anchor)
+                     VALUES ${new Array(rowCount).fill('(?,?,?)').join(',')}
+                     ON CONFLICT(device_id, data_type)
+                     DO UPDATE SET anchor = excluded.anchor, updated_at = CURRENT_TIMESTAMP`,
+                    chunk
+                );
             }
         }
 
         await db.run('COMMIT');
         inTransaction = false;
+        knownDevices.add(device_id);
 
         logger.info(
             `Ingested ${inserted} new metric(s) from device ${device_id} ` +
@@ -414,9 +451,11 @@ fastify.get('/api/v1/health-sync/stats', async (request, reply) => {
     let query = '';
     
     if (timeScale === 'days') {
-        query = `SELECT date_bucket as date, data_type, SUM(record_count) as count 
-                 FROM daily_sync_stats WHERE device_id = ? 
-                 GROUP BY date_bucket, data_type`;
+        // (device_id, date_bucket, data_type) is already the primary key of daily_sync_stats,
+        // so rows are already unique and ordered by date_bucket without a GROUP BY.
+        query = `SELECT date_bucket as date, data_type, record_count as count 
+                 FROM daily_sync_stats
+                 WHERE device_id = ? AND record_count > 0`;
     } else if (timeScale === 'weeks') {
         // Snap back to the Monday starting each week. The previous
         // `date(x,'weekday 1','-7 days')` was off by one: 'weekday 1' is a no-op on a
@@ -424,11 +463,13 @@ fastify.get('/api/v1/health-sync/stats', async (request, reply) => {
         // in the correct one, splitting every week across two buckets.
         const weekStart = `date(date_bucket, '-' || ((strftime('%w', date_bucket) + 6) % 7) || ' days')`;
         query = `SELECT ${weekStart} as date, data_type, SUM(record_count) as count
-                 FROM daily_sync_stats WHERE device_id = ?
+                 FROM daily_sync_stats
+                 WHERE device_id = ? AND record_count > 0
                  GROUP BY ${weekStart}, data_type`;
     } else if (timeScale === 'months') {
         query = `SELECT date(date_bucket, 'start of month') as date, data_type, SUM(record_count) as count 
-                 FROM daily_sync_stats WHERE device_id = ? 
+                 FROM daily_sync_stats
+                 WHERE device_id = ? AND record_count > 0
                  GROUP BY date(date_bucket, 'start of month'), data_type`;
     } else {
         return reply.status(400).send({ error: 'Invalid timeScale' });
@@ -443,7 +484,7 @@ fastify.get('/api/v1/health-sync/stats', async (request, reply) => {
         const aggregated = {};
         for (const row of rows) {
             const bucket = mapTypeToBucket(row.data_type);
-            if (bucket === 'Other') continue;
+            if (bucket === 'Other' || !row.count) continue;
             
             const key = `${row.date}_${bucket}`;
             if (!aggregated[key]) {
@@ -459,6 +500,33 @@ fastify.get('/api/v1/health-sync/stats', async (request, reply) => {
     }
 });
 
+let bonjour;
+let shuttingDown = false;
+
+async function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info(`Received ${signal}, shutting down gracefully...`);
+    try {
+        if (bonjour) {
+            await new Promise((resolve) => bonjour.unpublishAll(() => {
+                bonjour.destroy();
+                resolve();
+            }));
+        }
+        await fastify.close();
+        await dbQueue;
+        const db = await getDb();
+        await db.close();
+    } catch (err) {
+        logger.error(`Error during shutdown: ${err.message}`);
+    }
+    process.exit(0);
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+
 // Start Server
 const start = async () => {
     try {
@@ -470,7 +538,7 @@ const start = async () => {
         logger.info(`🚀 DataDonor Fastify HTTPS Server running on https://${config.server.host}:${config.server.port}`);
         
         // Broadcast mDNS Bonjour service
-        const bonjour = new Bonjour.Bonjour();
+        bonjour = new Bonjour.Bonjour();
         bonjour.publish({ 
             name: 'DataDonor Backend', 
             type: 'datadonor', 

@@ -25,6 +25,12 @@ async function setupDatabase() {
     // corruption, and not on a process crash. Worth it here; the client re-sends anything
     // whose anchor did not advance.
     await db.exec('PRAGMA synchronous = NORMAL');
+    // Wait up to 5s on lock contention (e.g. rebuild-stats) instead of failing immediately
+    // with SQLITE_BUSY, enforce declared FOREIGN KEY constraints, and keep temporary
+    // B-trees (GROUP BY) in memory.
+    await db.exec('PRAGMA busy_timeout = 5000');
+    await db.exec('PRAGMA foreign_keys = ON');
+    await db.exec('PRAGMA temp_store = MEMORY');
     
     logger.info('Running database migrations...');
     
@@ -75,20 +81,14 @@ async function setupDatabase() {
         );
     `);
 
-    // Create index if not exists
-    const indexCheck = await db.get(`
-        SELECT count(*) as count FROM sqlite_master WHERE type='index' AND name='idx_metrics_type_date';
-    `);
+    await db.exec(`CREATE INDEX IF NOT EXISTS idx_metrics_type_date ON health_metrics(data_type, start_date);`);
 
-    if (indexCheck.count === 0) {
-        await db.exec(`CREATE INDEX idx_metrics_type_date ON health_metrics(data_type, start_date);`);
-    }
-
-    // Backfill summary table if needed
-    const statsCheck = await db.get(`SELECT count(*) as count FROM daily_sync_stats`);
-    if (statsCheck.count === 0) {
-        const metricsCheck = await db.get(`SELECT count(*) as count FROM health_metrics`);
-        if (metricsCheck.count > 0) {
+    // Backfill summary table if needed. Probe with LIMIT 1 rather than COUNT(*) so
+    // startup does not scan the entire table on every boot.
+    const statsHasRows = await db.get(`SELECT 1 FROM daily_sync_stats LIMIT 1`);
+    if (!statsHasRows) {
+        const metricsHasRows = await db.get(`SELECT 1 FROM health_metrics LIMIT 1`);
+        if (metricsHasRows) {
             logger.info('Backfilling daily_sync_stats from existing health_metrics... This might take a moment.');
             // substr(start_date,1,10) matches how ingestion buckets (start_date.split('T')[0]).
             // date() would normalize offsets to UTC and shift buckets by a day relative to
