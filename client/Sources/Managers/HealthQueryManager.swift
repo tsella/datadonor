@@ -354,9 +354,13 @@ final class HealthQueryManager: ObservableObject {
             if !ok { failedTypes.append(sampleType.identifier) }
         }
 
-        // Final timestamp update
-        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "lastSyncTimestamp")
-        self.lastUIUpdateTime = Date()
+        // Only a clean run moves "last synced". A run where every type failed, or one the
+        // user stopped, leaves the previous value: the dashboard renders this key as the
+        // last successful sync, and a cancelled run has not synced anything.
+        if failedTypes.isEmpty && !isCancelled {
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "lastSyncTimestamp")
+            self.lastUIUpdateTime = Date()
+        }
 
         if failedTypes.isEmpty {
             _ = NotificationManager.shared.recordSyncOutcome(failedTypeCount: 0)
