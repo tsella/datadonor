@@ -1,6 +1,66 @@
 import Foundation
 import HealthKit
 
+/// The one list of HealthKit types the app requests access to and sweeps.
+///
+/// It used to exist twice, here and in `HealthQueryManager`, with the same three
+/// `#available` blocks on both sides. A type added to the sweep but not to the
+/// authorization set was queried without read permission: HealthKit returns an empty
+/// page, the anchor still advances, and the type looks synced forever.
+enum HealthTypeCatalog {
+    static var quantityIdentifiers: [HKQuantityTypeIdentifier] {
+        var types: [HKQuantityTypeIdentifier] = [
+            // Cardio and heart
+            .heartRate, .heartRateVariabilitySDNN, .restingHeartRate, .walkingHeartRateAverage,
+            .heartRateRecoveryOneMinute, .vo2Max, .oxygenSaturation, .atrialFibrillationBurden,
+            // Activity and mobility
+            .stepCount, .distanceWalkingRunning, .distanceCycling, .distanceSwimming,
+            .distanceDownhillSnowSports, .swimmingStrokeCount, .underwaterDepth, .waterTemperature,
+            .flightsClimbed, .activeEnergyBurned, .basalEnergyBurned, .appleExerciseTime,
+            .appleMoveTime, .appleStandTime, .walkingAsymmetryPercentage, .walkingStepLength,
+            .walkingDoubleSupportPercentage, .walkingSpeed, .appleWalkingSteadiness,
+            .numberOfTimesFallen,
+            // Environment and breathing
+            .environmentalAudioExposure, .headphoneAudioExposure, .uvExposure, .respiratoryRate,
+            // Vitals
+            .height, .bloodPressureDiastolic,
+            .bloodPressureSystolic, .bodyMass, .bodyMassIndex, .bodyFatPercentage, .leanBodyMass,
+            .bodyTemperature, .bloodGlucose, .dietaryEnergyConsumed, .dietaryWater
+        ]
+        if #available(iOS 16.0, *) { types.append(.appleSleepingWristTemperature) }
+        if #available(iOS 17.0, *) {
+            types.append(.timeInDaylight)
+            types.append(.physicalEffort)
+        }
+        if #available(iOS 18.0, *) {
+            types.append(.workoutEffortScore)
+            types.append(.estimatedWorkoutEffortScore)
+            types.append(.appleSleepingBreathingDisturbances)
+        }
+        return types
+    }
+
+    static var categoryIdentifiers: [HKCategoryTypeIdentifier] {
+        [
+            .sleepAnalysis, .appleStandHour, .mindfulSession, .menstrualFlow,
+            .irregularHeartRhythmEvent, .highHeartRateEvent, .lowHeartRateEvent,
+            .environmentalAudioExposureEvent
+        ]
+    }
+
+    static var readTypes: Set<HKObjectType> {
+        var types = Set<HKObjectType>()
+        for identifier in quantityIdentifiers {
+            if let type = HKObjectType.quantityType(forIdentifier: identifier) { types.insert(type) }
+        }
+        for identifier in categoryIdentifiers {
+            if let type = HKObjectType.categoryType(forIdentifier: identifier) { types.insert(type) }
+        }
+        types.insert(HKObjectType.workoutType())
+        return types
+    }
+}
+
 class HealthStoreManager: ObservableObject {
     let healthStore = HKHealthStore()
     
@@ -12,103 +72,9 @@ class HealthStoreManager: ObservableObject {
             return
         }
         
-        let quantityTypes: [HKQuantityTypeIdentifier] = [
-            // Cardio & Heart
-            .heartRate,
-            .heartRateVariabilitySDNN,
-            .restingHeartRate,
-            .walkingHeartRateAverage,
-            .heartRateRecoveryOneMinute,
-            .vo2Max,
-            .oxygenSaturation,
-            .atrialFibrillationBurden,
-            
-            // Activity & Mobility
-            .stepCount,
-            .distanceWalkingRunning,
-            .distanceCycling,
-            .distanceSwimming,
-            .distanceDownhillSnowSports,
-            .swimmingStrokeCount,
-            .underwaterDepth,
-            .waterTemperature,
-            .flightsClimbed,
-            .activeEnergyBurned,
-            .basalEnergyBurned,
-            .appleExerciseTime,
-            .appleMoveTime,
-            .appleStandTime,
-            .walkingAsymmetryPercentage,
-            .walkingStepLength,
-            .walkingDoubleSupportPercentage,
-            .walkingSpeed,
-            .appleWalkingSteadiness,
-            .numberOfTimesFallen,
-            
-            // Environmental & Sleep
-            .environmentalAudioExposure,
-            .headphoneAudioExposure,
-            .uvExposure,
-            .respiratoryRate,
-            
-            // Vitals (General)
-            .height,
-            .bloodPressureDiastolic,
-            .bloodPressureSystolic,
-            .bodyMass,
-            .bodyMassIndex,
-            .bodyFatPercentage,
-            .leanBodyMass,
-            .bodyTemperature,
-            .bloodGlucose,
-            
-            // Nutrition (Optional scaffolded)
-            .dietaryEnergyConsumed,
-            .dietaryWater
-        ]
-        
-        // Use #available(iOS 16.0, *) to safely add new types, although our deployment target is 16.0
-        var quantityIdentifiers = quantityTypes
-        if #available(iOS 16.0, *) {
-            quantityIdentifiers.append(.appleSleepingWristTemperature)
-        }
-        if #available(iOS 17.0, *) {
-            quantityIdentifiers.append(.timeInDaylight)
-            quantityIdentifiers.append(.physicalEffort)
-        }
-        if #available(iOS 18.0, *) {
-            quantityIdentifiers.append(.workoutEffortScore)
-            quantityIdentifiers.append(.estimatedWorkoutEffortScore)
-            quantityIdentifiers.append(.appleSleepingBreathingDisturbances)
-        }
-        
-        let categoryTypes: [HKCategoryTypeIdentifier] = [
-            .sleepAnalysis,
-            .appleStandHour,
-            .mindfulSession,
-            .menstrualFlow,
-            .irregularHeartRhythmEvent,
-            .highHeartRateEvent,
-            .lowHeartRateEvent,
-            .environmentalAudioExposureEvent
-        ]
-        
-        var readTypes = Set<HKObjectType>()
-        
-        for identifier in quantityIdentifiers {
-            if let type = HKObjectType.quantityType(forIdentifier: identifier) {
-                readTypes.insert(type)
-            }
-        }
-        
-        for identifier in categoryTypes {
-            if let type = HKObjectType.categoryType(forIdentifier: identifier) {
-                readTypes.insert(type)
-            }
-        }
-        
-        readTypes.insert(HKObjectType.workoutType())
-        
+        // One source of truth for the type list, shared with the sync sweep.
+        let readTypes = HealthTypeCatalog.readTypes
+
         healthStore.requestAuthorization(toShare: nil, read: readTypes) { success, error in
             DispatchQueue.main.async {
                 if success {

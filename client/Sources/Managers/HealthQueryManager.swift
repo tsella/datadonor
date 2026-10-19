@@ -125,41 +125,13 @@ final class HealthQueryManager: ObservableObject {
     }
     
     func getAllSupportedQuantityTypes() -> [HKQuantityTypeIdentifier] {
-        var types: [HKQuantityTypeIdentifier] = [
-            .heartRate, .heartRateVariabilitySDNN, .restingHeartRate, .walkingHeartRateAverage,
-            .heartRateRecoveryOneMinute, .vo2Max, .oxygenSaturation, .atrialFibrillationBurden,
-            .stepCount, .distanceWalkingRunning, .distanceCycling, .distanceSwimming,
-            .distanceDownhillSnowSports, .swimmingStrokeCount, .underwaterDepth, .waterTemperature,
-            .flightsClimbed, .activeEnergyBurned, .basalEnergyBurned, .appleExerciseTime,
-            .appleMoveTime, .appleStandTime, .walkingAsymmetryPercentage, .walkingStepLength,
-            .walkingDoubleSupportPercentage, .walkingSpeed, .appleWalkingSteadiness,
-            .numberOfTimesFallen,
-            .environmentalAudioExposure, .headphoneAudioExposure, .uvExposure, .respiratoryRate,
-            .height, .bloodPressureDiastolic,
-            .bloodPressureSystolic, .bodyMass, .bodyMassIndex, .bodyFatPercentage, .leanBodyMass,
-            .bodyTemperature, .bloodGlucose, .dietaryEnergyConsumed, .dietaryWater
-        ]
-        if #available(iOS 16.0, *) { types.append(.appleSleepingWristTemperature) }
-        if #available(iOS 17.0, *) { 
-            types.append(.timeInDaylight) 
-            types.append(.physicalEffort)
-        }
-        if #available(iOS 18.0, *) {
-            types.append(.workoutEffortScore)
-            types.append(.estimatedWorkoutEffortScore)
-            types.append(.appleSleepingBreathingDisturbances)
-        }
-        return types
+        HealthTypeCatalog.quantityIdentifiers
     }
-    
+
     func getAllSupportedCategoryTypes() -> [HKCategoryTypeIdentifier] {
-        return [
-            .sleepAnalysis, .appleStandHour, .mindfulSession, .menstrualFlow,
-            .irregularHeartRhythmEvent, .highHeartRateEvent, .lowHeartRateEvent,
-            .environmentalAudioExposureEvent
-        ]
+        HealthTypeCatalog.categoryIdentifiers
     }
-    
+
     func getAllSupportedWorkoutTypes() -> [HKWorkoutType] {
         return [.workoutType()]
     }
