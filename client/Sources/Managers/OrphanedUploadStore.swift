@@ -13,10 +13,11 @@ import Foundation
 /// behaviour. Keeping the stored set to "server confirmed this" keeps writes off the
 /// per-upload hot path — it is written once per orphaned upload rather than once per
 /// upload — and makes the absence of an entry unambiguous.
-final class OrphanedUploadStore {
+final class OrphanedUploadStore: @unchecked Sendable {
     private let defaultsKey = "acknowledgedOrphanedUploads"
     private let lock = NSLock()
     private let defaults: UserDefaults
+    private var map: [String: Double]
 
     /// Entries older than this are pruned so a crash loop cannot grow the map without
     /// bound. Pruning happens on write, which is rare.
@@ -24,20 +25,27 @@ final class OrphanedUploadStore {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        self.map = defaults.dictionary(forKey: defaultsKey) as? [String: Double] ?? [:]
     }
 
-    /// token → acknowledgement timestamp.
-    private func load() -> [String: Double] {
-        defaults.dictionary(forKey: defaultsKey) as? [String: Double] ?? [:]
+    private func persist(_ snapshot: [String: Double]) {
+        if Thread.isMainThread {
+            defaults.set(snapshot, forKey: defaultsKey)
+        } else {
+            DispatchQueue.main.async { [defaults, defaultsKey] in
+                defaults.set(snapshot, forKey: defaultsKey)
+            }
+        }
     }
 
     func recordSuccess(token: String) {
         lock.lock()
-        defer { lock.unlock() }
         let cutoff = Date().timeIntervalSince1970 - staleAfter
-        var map = load().filter { $0.value >= cutoff }
+        map = map.filter { $0.value >= cutoff }
         map[token] = Date().timeIntervalSince1970
-        defaults.set(map, forKey: defaultsKey)
+        let snapshot = map
+        lock.unlock()
+        persist(snapshot)
     }
 
     /// True only when the server confirmed the batch with a 2xx. An interrupted upload may
@@ -46,14 +54,30 @@ final class OrphanedUploadStore {
     func wasAcknowledged(token: String) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return load()[token] != nil
+        return map[token] != nil
+    }
+
+    /// Atomically checks whether `token` was acknowledged and removes it if so.
+    func consumeAcknowledgement(token: String) -> Bool {
+        lock.lock()
+        guard map.removeValue(forKey: token) != nil else {
+            lock.unlock()
+            return false
+        }
+        let snapshot = map
+        lock.unlock()
+        persist(snapshot)
+        return true
     }
 
     func forget(token: String) {
         lock.lock()
-        defer { lock.unlock() }
-        var map = load()
-        guard map.removeValue(forKey: token) != nil else { return }
-        defaults.set(map, forKey: defaultsKey)
+        guard map.removeValue(forKey: token) != nil else {
+            lock.unlock()
+            return
+        }
+        let snapshot = map
+        lock.unlock()
+        persist(snapshot)
     }
 }

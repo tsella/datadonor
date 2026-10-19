@@ -1,6 +1,6 @@
 import Foundation
 
-struct HealthDataPayload: Codable {
+struct HealthDataPayload: Codable, Sendable {
     let deviceId: String
     let syncTimestamp: String
     let data: [HealthDataPoint]
@@ -16,7 +16,7 @@ struct HealthDataPayload: Codable {
     }
 }
 
-struct HealthDataPoint: Codable {
+struct HealthDataPoint: Codable, Sendable {
     let type: String
     let value: HealthDataValue
     let unit: String?
@@ -38,7 +38,7 @@ struct HealthDataPoint: Codable {
     }
 }
 
-enum HealthDataValue: Codable {
+enum HealthDataValue: Codable, Sendable {
     case string(String)
     case double(Double)
     

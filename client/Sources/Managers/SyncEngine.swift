@@ -1,12 +1,6 @@
 import Foundation
+import CryptoKit
 import zlib
-
-/// Result of a completed upload, surfaced to the caller so it can decide
-/// whether advancing the HealthKit anchor is safe.
-enum UploadOutcome {
-    case success(recordsAccepted: Int)
-    case failed(Error)
-}
 
 struct SyncError: LocalizedError {
     let message: String
@@ -71,6 +65,28 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
 
         let ephemeralConfig = URLSessionConfiguration.ephemeral
         self.ephemeralSession = URLSession(configuration: ephemeralConfig, delegate: self, delegateQueue: nil)
+
+        Self.pruneStaleTempFiles()
+    }
+
+    /// Cleans up any staged `.json` / `.json.gz` upload files left behind in `temporaryDirectory`
+    /// from crashes older than 24 hours.
+    private static func pruneStaleTempFiles() {
+        DispatchQueue.global(qos: .utility).async {
+            let tempDir = FileManager.default.temporaryDirectory
+            let cutoff = Date().addingTimeInterval(-24 * 60 * 60)
+            guard let files = try? FileManager.default.contentsOfDirectory(
+                at: tempDir, includingPropertiesForKeys: [.creationDateKey]
+            ) else { return }
+
+            for file in files where file.lastPathComponent.hasSuffix(".json") || file.lastPathComponent.hasSuffix(".json.gz") {
+                if let attrs = try? FileManager.default.attributesOfItem(atPath: file.path),
+                   let created = attrs[.creationDate] as? Date,
+                   created < cutoff {
+                    try? FileManager.default.removeItem(at: file)
+                }
+            }
+        }
     }
 
     // MARK: - URLSessionDelegate
@@ -251,9 +267,22 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
         return output
     }
 
-    /// Upload token for a batch, so the caller can check `wasAcknowledgedWhileDetached`
-    /// after a relaunch.
-    func makeUploadToken() -> String { UUID().uuidString }
+    /// Deterministic upload token for a HealthKit batch, keyed off the sample type, the
+    /// starting anchor and the batch's boundary UUIDs. If a background upload finishes
+    /// while the app is suspended or terminated, the next sync pass derives the same token
+    /// for the un-advanced anchor and recognizes the server's earlier 2xx acknowledgement.
+    static func batchToken(
+        type: String,
+        anchorData: Data?,
+        firstUUID: String?,
+        lastUUID: String?,
+        deletedCount: Int
+    ) -> String {
+        let anchorPart = anchorData?.base64EncodedString() ?? "initial"
+        let raw = "\(type)|\(anchorPart)|\(firstUUID ?? "")|\(lastUUID ?? "")|\(deletedCount)"
+        let digest = SHA256.hash(data: Data(raw.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
 
     /// Uploads a payload and waits for the server to acknowledge it.
     ///
@@ -265,46 +294,59 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
     /// Orphan bookkeeping is entirely internal: callers cannot forget a step and silently
     /// re-upload a batch the server already holds.
     func sync(payload: Data, serverURL: URL, apiKey: String,
+              token: String? = nil,
               timeout: TimeInterval = 300) async throws {
-        let uploadToken = UUID().uuidString
-        // However this ends, the token's record ends with it — otherwise a failed upload
-        // leaves an entry sitting in the store until the staleness prune.
-        defer { orphanStore.forget(token: uploadToken) }
+        let uploadToken = token ?? UUID().uuidString
+
+        // If an earlier background upload of this exact batch completed while the app was
+        // suspended or terminated, consume that 2xx acknowledgement and skip re-uploading.
+        if orphanStore.consumeAcknowledgement(token: uploadToken) {
+            DataDonorLogger.shared.log(
+                "Upload \(uploadToken.prefix(12))… was already acknowledged by the server while detached; " +
+                "advancing anchor without resending.", level: .info)
+            return
+        }
 
         do {
             try await upload(payload: payload, serverURL: serverURL, apiKey: apiKey,
                              token: uploadToken, timeout: timeout)
+            orphanStore.forget(token: uploadToken)
         } catch {
             // A background session keeps uploading across app death, so the server may have
-            // stored this batch with nobody left waiting. Only a recorded 2xx counts — never
-            // a merely started upload, which may never have arrived.
-            guard orphanStore.wasAcknowledged(token: uploadToken) else { throw error }
+            // stored this batch while we were waiting. Only a recorded 2xx counts — never
+            // a merely started upload, which may never have arrived. If the task is still in
+            // flight after a CancellationError, leave the token untouched so its eventual
+            // 2xx completion can be recorded for the next sync run.
+            guard orphanStore.consumeAcknowledgement(token: uploadToken) else { throw error }
             DataDonorLogger.shared.log(
-                "Upload \(uploadToken) was acknowledged by the server while detached; " +
+                "Upload \(uploadToken.prefix(12))… was acknowledged by the server while detached; " +
                 "treating as delivered instead of resending.", level: .info)
         }
     }
 
     /// Performs one upload attempt. Background uploads must be file-backed, so the payload
-    /// is staged in a temp file that is removed once the task completes.
+    /// is compressed and staged in a temp file off the main thread, then removed once the
+    /// background URLSession task completes.
     private func upload(payload: Data, serverURL: URL, apiKey: String, token uploadToken: String,
                         timeout: TimeInterval) async throws {
-        let tempDir = FileManager.default.temporaryDirectory
-
-        // This JSON repeats `type` and `source` verbatim on every record, so it compresses
-        // heavily. Fall back to the raw body if compression fails for any reason — the
-        // server accepts both, keyed off Content-Encoding. Log the fallback: degrading
-        // silently would hide a build where compression is broken, which looks healthy
-        // while sending ~40x more bytes than it should.
-        let compressed = Self.gzip(payload)
-        if compressed == nil {
-            DataDonorLogger.shared.log(
-                "Compression failed for a \(payload.count)-byte payload; uploading uncompressed.",
-                level: .warn)
-        }
-        let bodyData = compressed ?? payload
-        let fileURL = tempDir.appendingPathComponent(uploadToken + (compressed == nil ? ".json" : ".json.gz"))
-        try bodyData.write(to: fileURL)
+        // Compress and write the staging file on a background thread so multi-MB batches
+        // never block the main actor.
+        let (fileURL, isCompressed) = try await Task.detached(priority: .utility) { () -> (URL, Bool) in
+            let tempDir = FileManager.default.temporaryDirectory
+            let compressed = Self.gzip(payload)
+            if compressed == nil {
+                DataDonorLogger.shared.log(
+                    "Compression failed for a \(payload.count)-byte payload; uploading uncompressed.",
+                    level: .warn)
+            }
+            let bodyData = compressed ?? payload
+            // Include a unique suffix per attempt so a retry doesn't overwrite a file that
+            // an earlier background task is still reading.
+            let fileName = "\(uploadToken)-\(UUID().uuidString)\(compressed == nil ? ".json" : ".json.gz")"
+            let url = tempDir.appendingPathComponent(fileName)
+            try bodyData.write(to: url, options: .atomic)
+            return (url, compressed != nil)
+        }.value
 
         // A POST is not cached, so the shared builder's no-cache default would only block
         // a revalidation the request never needed.
@@ -315,7 +357,7 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
             cachePolicy: .useProtocolCachePolicy
         )
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if compressed != nil {
+        if isCompressed {
             request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
         }
         // Bound the request itself as well as the await below, so a stalled connection
@@ -336,13 +378,16 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
                     // The key the delegate will use. Survives relaunch with the task.
                     task.taskDescription = uploadToken
 
-                    withState {
+                    let previousFile = withState { () -> URL? in
                         pendingUploads[uploadToken] = continuation
-                        payloadFiles[uploadToken] = fileURL
+                        return payloadFiles.updateValue(fileURL, forKey: uploadToken)
+                    }
+                    if let previousFile, previousFile != fileURL {
+                        try? FileManager.default.removeItem(at: previousFile)
                     }
 
                     DataDonorLogger.shared.log(
-                        "Started upload \(uploadToken) for payload size: \(payload.count) bytes", level: .info)
+                        "Started upload \(uploadToken.prefix(12))… for payload size: \(payload.count) bytes", level: .info)
                     task.resume()
                 }
             } onCancel: {
@@ -350,18 +395,20 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
                 // Resume the waiter so `sync()` doesn't hang for the rest of the process
                 // lifetime. The upload itself is left running: a background session is
                 // allowed to finish after suspension, and if it lands a 2xx the delegate
-                // records it as an acknowledged orphan.
+                // records it as an acknowledged orphan and cleans up `payloadFiles`.
                 let continuation = withState { pendingUploads.removeValue(forKey: uploadToken) }
                 continuation?.resume(throwing: CancellationError())
             }
         } catch {
-            // The delegate cleans up on completion; this covers the case where the task
-            // never started and no delegate callback will arrive.
-            let stillPending = withState { () -> URL? in
+            // Only remove `fileURL` here if the URLSessionUploadTask was never created
+            // (i.e., `payloadFiles[uploadToken]` was not registered for this file). Once
+            // `task.resume()` has been called, `urlSession(_:task:didCompleteWithError:)`
+            // owns deleting the file when the background transfer finishes.
+            let wasHandedToSession = withState { () -> Bool in
                 pendingUploads.removeValue(forKey: uploadToken)
-                return payloadFiles.removeValue(forKey: uploadToken)
+                return payloadFiles[uploadToken] == fileURL
             }
-            if stillPending != nil {
+            if !wasHandedToSession {
                 try? FileManager.default.removeItem(at: fileURL)
             }
             throw error
