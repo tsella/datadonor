@@ -1,13 +1,16 @@
 import UIKit
 import BackgroundTasks
+import HealthKit
 
 @MainActor
 class AppDelegate: NSObject, UIApplicationDelegate {
 
+    // Single shared HealthKit store across the entire process
+    let healthStore = HKHealthStore()
     // We hold a reference to our sync engine to handle background events
     let syncEngine = SyncEngine()
-    let healthQueryManager = HealthQueryManager()
-    let healthStoreManager = HealthStoreManager()
+    lazy var healthQueryManager = HealthQueryManager(healthStore: healthStore)
+    lazy var healthStoreManager = HealthStoreManager(healthStore: healthStore)
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
 

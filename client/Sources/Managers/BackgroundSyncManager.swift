@@ -30,6 +30,10 @@ final class BackgroundSyncManager {
     /// observer path and the task path run the same code.
     private var syncEngine: SyncEngine?
     private var healthQueryManager: HealthQueryManager?
+    private var activeObserverQueries: [HKObserverQuery] = []
+    private var pendingObservedTypes: Set<HKSampleType> = []
+    private var pendingObserverCompletions: [SendableBox<() -> Void>] = []
+    private var isDrainingObservers = false
 
     private init() {}
 
@@ -157,7 +161,7 @@ final class BackgroundSyncManager {
     /// Reads credentials at execution time: the user may have changed the key or the
     /// server while the app was suspended, and a stale key 403s every request.
     private func credentials() -> (serverURL: URL, apiKey: String)? {
-        let apiKey = UserDefaults.standard.string(forKey: "apiKey") ?? ""
+        let apiKey = ServerResolver.loadApiKey()
         guard !apiKey.isEmpty else {
             DataDonorLogger.shared.log("Background sync skipped: no API key configured.", level: .warn)
             return nil
@@ -201,6 +205,15 @@ final class BackgroundSyncManager {
     /// Observers are process-bound: they die with the app (jetsam, crash, force-quit,
     /// reboot) and must be registered again on every launch.
     nonisolated func setupObserverQueries(healthStore: HKHealthStore) {
+        let storeBox = SendableBox(value: healthStore)
+        Task { @MainActor in
+            self.registerObserverQueriesIfNeeded(healthStore: storeBox.value)
+        }
+    }
+
+    private func registerObserverQueriesIfNeeded(healthStore: HKHealthStore) {
+        guard activeObserverQueries.isEmpty else { return }
+
         var observedTypes: [HKSampleType] = []
 
         let quantityIdentifiers: [HKQuantityTypeIdentifier] = [
@@ -238,6 +251,7 @@ final class BackgroundSyncManager {
                 }
             }
 
+            activeObserverQueries.append(query)
             healthStore.execute(query)
             healthStore.enableBackgroundDelivery(for: sampleType, frequency: .hourly) { success, error in
                 if !success {
@@ -250,26 +264,53 @@ final class BackgroundSyncManager {
     }
 
     /// Syncs in the observer's own window, borrowing a background task so the process is
-    /// not suspended the moment the callback returns.
+    /// not suspended the moment the callback returns. Concurrent observer wakes (e.g. finishing
+    /// a workout updates Heart Rate, Active Energy, Steps and Workouts simultaneously) are
+    /// coalesced and drained in sequence rather than dropped.
     private func syncFromObserver(types: [HKSampleType], completion: SendableBox<() -> Void>) {
         guard let healthQueryManager else {
             completion.value()
             return
         }
-        // Do not start a second sync behind a running one: the anchors are shared state.
+
+        pendingObservedTypes.formUnion(types)
+        pendingObserverCompletions.append(completion)
+
+        guard !isDrainingObservers else { return }
+
+        // If a full sync (manual or BGTask) is already running, let it cover the types and
+        // release the observer completions immediately.
         guard !healthQueryManager.isSyncing else {
-            DataDonorLogger.shared.log("Observer sync skipped: another sync is running.", level: .info)
-            completion.value()
+            DataDonorLogger.shared.log("Observer sync coalesced into active full sync.", level: .info)
+            let completions = pendingObserverCompletions
+            pendingObserverCompletions.removeAll()
+            pendingObservedTypes.removeAll()
+            for item in completions { item.value() }
             return
         }
 
+        isDrainingObservers = true
         let token = BackgroundTaskToken()
         token.begin(name: "DataDonorObserverSync")
 
         Task { @MainActor in
-            _ = await self.runSync(types: types, reconcileAnchors: false, origin: "observer")
-            completion.value()
-            token.end()
+            defer {
+                self.isDrainingObservers = false
+                for item in self.pendingObserverCompletions { item.value() }
+                self.pendingObserverCompletions.removeAll()
+                self.pendingObservedTypes.removeAll()
+                token.end()
+            }
+
+            while !self.pendingObservedTypes.isEmpty {
+                let batchTypes = Array(self.pendingObservedTypes)
+                self.pendingObservedTypes.removeAll()
+                let batchCompletions = self.pendingObserverCompletions
+                self.pendingObserverCompletions.removeAll()
+
+                _ = await self.runSync(types: batchTypes, reconcileAnchors: false, origin: "observer")
+                for item in batchCompletions { item.value() }
+            }
         }
     }
 }

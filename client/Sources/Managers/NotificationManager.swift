@@ -101,18 +101,4 @@ final class NotificationManager: @unchecked Sendable {
             }
         }
     }
-
-    func sendDailySummaryNotification(recordsSynced: Int) {
-        let content = UNMutableNotificationContent()
-        content.title = "DataDonor Sync Complete"
-        content.body = "Successfully synced \(recordsSynced) health records to your server."
-        content.sound = .default
-
-        let request = UNNotificationRequest(identifier: "daily_summary", content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request) { error in
-            if let error = error {
-                DataDonorLogger.shared.log("Failed to post summary notification: \(error.localizedDescription)", level: .warn)
-            }
-        }
-    }
 }

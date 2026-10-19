@@ -48,6 +48,19 @@ enum HealthTypeCatalog {
         ]
     }
 
+    static var priorityIdentifiers: Set<String> {
+        [
+            HKWorkoutType.workoutType().identifier,
+            HKCategoryTypeIdentifier.sleepAnalysis.rawValue,
+            HKQuantityTypeIdentifier.heartRate.rawValue,
+            HKQuantityTypeIdentifier.stepCount.rawValue,
+            HKQuantityTypeIdentifier.activeEnergyBurned.rawValue,
+            HKQuantityTypeIdentifier.restingHeartRate.rawValue,
+            HKQuantityTypeIdentifier.heartRateVariabilitySDNN.rawValue,
+            HKQuantityTypeIdentifier.bodyMass.rawValue
+        ]
+    }
+
     static var readTypes: Set<HKObjectType> {
         var types = Set<HKObjectType>()
         for identifier in quantityIdentifiers {
@@ -61,10 +74,15 @@ enum HealthTypeCatalog {
     }
 }
 
+@MainActor
 class HealthStoreManager: ObservableObject {
-    let healthStore = HKHealthStore()
+    let healthStore: HKHealthStore
     
     @Published var isAuthorized: Bool = UserDefaults.standard.bool(forKey: "hasRequestedHealthAccess")
+
+    init(healthStore: HKHealthStore = HKHealthStore()) {
+        self.healthStore = healthStore
+    }
     
     func requestAuthorization(completion: @escaping (Bool, Error?) -> Void = { _, _ in }) {
         guard HKHealthStore.isHealthDataAvailable() else {

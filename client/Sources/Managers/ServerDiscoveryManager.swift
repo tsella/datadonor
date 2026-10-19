@@ -1,7 +1,8 @@
 import Foundation
 import Combine
 
-class ServerDiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDelegate, NetServiceDelegate {
+@MainActor
+class ServerDiscoveryManager: NSObject, ObservableObject, @preconcurrency NetServiceBrowserDelegate, @preconcurrency NetServiceDelegate {
     /// The server the user approved and we may talk to. Never set before approval —
     /// anything else would leak the API key to an unapproved (possibly spoofed) host.
     @Published var activeServerURL: URL?
@@ -9,6 +10,7 @@ class ServerDiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
 
     private var browser: NetServiceBrowser
     private var resolvingServices: [NetService] = []
+    private var isSearching = false
     
     override init() {
         self.browser = NetServiceBrowser()
@@ -17,11 +19,15 @@ class ServerDiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
     }
     
     func startDiscovery() {
+        guard !isSearching else { return }
+        isSearching = true
         DataDonorLogger.shared.log("Discovery: searching for _datadonor._tcp in local.", level: .debug)
         browser.searchForServices(ofType: "_datadonor._tcp", inDomain: "local.")
     }
     
     func stopDiscovery() {
+        guard isSearching else { return }
+        isSearching = false
         DataDonorLogger.shared.log("Discovery: stopped.", level: .debug)
         browser.stop()
         resolvingServices.removeAll()
@@ -34,10 +40,12 @@ class ServerDiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
     }
     
     func netServiceBrowserDidStopSearch(_ browser: NetServiceBrowser) {
+        isSearching = false
         DataDonorLogger.shared.log("Discovery: browser stopped searching.", level: .debug)
     }
     
     func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String : NSNumber]) {
+        isSearching = false
         DataDonorLogger.shared.log("Discovery: browser did not search: \(errorDict)", level: .warn)
     }
     
