@@ -348,14 +348,19 @@ final class HealthQueryManager: ObservableObject {
         self.lastUIUpdateTime = Date()
 
         if failedTypes.isEmpty {
+            _ = NotificationManager.shared.recordSyncOutcome(failedTypeCount: 0)
             DataDonorLogger.shared.log("Completed health data extraction loop.", level: .info)
         } else {
             // Anchors for these types were left in place, so the next run retries them.
             DataDonorLogger.shared.log(
                 "Completed extraction loop with \(failedTypes.count) failed type(s): \(failedTypes.joined(separator: ", ")). These will retry on the next sync.",
                 level: .warn)
-            NotificationManager.shared.sendSyncErrorNotification(
-                message: "\(failedTypes.count) data type(s) failed to upload and will retry on the next sync.")
+            // The owner hears about a persistent problem, not a blip: three failing
+            // runs in a row, then at most one alert an hour.
+            if NotificationManager.shared.recordSyncOutcome(failedTypeCount: failedTypes.count) {
+                NotificationManager.shared.sendSyncErrorNotification(
+                    message: "\(failedTypes.count) data type(s) failed on 3 syncs in a row. The app keeps retrying.")
+            }
         }
 
         // Heartbeat. A run that uploaded nothing still tells the server this device is

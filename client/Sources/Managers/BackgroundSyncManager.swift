@@ -71,7 +71,7 @@ final class BackgroundSyncManager {
         let request = BGAppRefreshTaskRequest(identifier: syncTaskIdentifier)
         // A floor, not a promise. iOS weighs app usage, battery and network before it
         // honours this, and often runs it hours later.
-        request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 5 * 60)
 
         do {
             try BGTaskScheduler.shared.submit(request)

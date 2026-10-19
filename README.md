@@ -78,6 +78,10 @@ iOS decides when a background task runs; the `earliestBeginDate` values are floo
 cadence. Observers are process-bound and are registered on every launch, so a force-quit
 stops them until the app is opened again.
 
+The refresh request asks for a five-minute floor. A sync failure alert is sent only after
+three consecutive runs fail, and a clean run clears the count; the streak and the last alert
+time live in `UserDefaults` so they survive the fresh process a background run usually gets.
+
 To trigger a task by hand in Xcode, pause the debugger and run:
 
 ```
