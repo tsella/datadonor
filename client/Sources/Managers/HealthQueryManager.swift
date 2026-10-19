@@ -57,7 +57,19 @@ final class HealthQueryManager: ObservableObject {
         UserDefaults.standard.set(data, forKey: Self.anchorPrefix + type)
     }
     
+    /// Units depend only on the identifier, but the switch builds compound HKUnits from
+    /// strings. It used to run once per sample, so a 5000-record batch rebuilt the same
+    /// handful of units thousands of times.
+    private var unitCache: [HKQuantityTypeIdentifier: HKUnit] = [:]
+
     private func unit(for identifier: HKQuantityTypeIdentifier) -> HKUnit {
+        if let cached = unitCache[identifier] { return cached }
+        let resolved = buildUnit(for: identifier)
+        unitCache[identifier] = resolved
+        return resolved
+    }
+
+    private func buildUnit(for identifier: HKQuantityTypeIdentifier) -> HKUnit {
         switch identifier {
         case .heartRate, .restingHeartRate, .walkingHeartRateAverage, .heartRateRecoveryOneMinute: return HKUnit.count().unitDivided(by: .minute())
         case .heartRateVariabilitySDNN: return HKUnit.secondUnit(with: .milli)
