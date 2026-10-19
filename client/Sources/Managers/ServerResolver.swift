@@ -98,12 +98,24 @@ enum ServerResolver {
     }
 
     /// Removes every stored entry for this server, including differently-cased ones written
-    /// by older builds.
+    /// by older builds, and stops the app dialling it again.
+    ///
+    /// Dropping the entry alone was not enough: `resolveFromDefaults` prefers the typed
+    /// override and then the remembered active server, so both kept pointing at a host whose
+    /// pin had just been forgotten. Every background sync then failed the TLS check with
+    /// nothing surfaced to the user.
     static func revokeApproval(matchingHost host: String) {
         let target = canonicalHost(host)
         let remaining = approvedServers().filter {
             URL(string: $0)?.host.map(canonicalHost) != target
         }
         UserDefaults.standard.set(remaining, forKey: approvedKey)
+
+        let defaults = UserDefaults.standard
+        for key in ["lastActiveServerURL", "customServerURL"] {
+            guard let stored = defaults.string(forKey: key),
+                  URL(string: stored)?.host.map(canonicalHost) == target else { continue }
+            defaults.removeObject(forKey: key)
+        }
     }
 }
