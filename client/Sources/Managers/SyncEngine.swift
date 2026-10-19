@@ -167,13 +167,29 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
 
     // MARK: - Requests
 
+    /// The one place the wire contract is written. Four callers used to repeat the bearer
+    /// header, the device header and the cache policy, so a new required header meant four
+    /// edits and one of them was always missed.
+    private func makeRequest(
+        url: URL,
+        method: String,
+        apiKey: String,
+        deviceId: String? = nil,
+        cachePolicy: URLRequest.CachePolicy = .reloadIgnoringLocalCacheData
+    ) -> URLRequest {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.cachePolicy = cachePolicy
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        if let deviceId {
+            request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
+        }
+        return request
+    }
+
     func fetchServerCheckpoint(serverURL: URL, apiKey: String, deviceId: String) async throws -> (checkpoints: [String: String], totalRecords: Int)? {
         let url = serverURL.appendingPathComponent("/api/v1/health-sync/checkpoint")
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
+        let request = makeRequest(url: url, method: "GET", apiKey: apiKey, deviceId: deviceId)
 
         let (data, response) = try await ephemeralSession.data(for: request)
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
@@ -187,10 +203,8 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
     }
 
     func ping(url: URL, apiKey: String) async throws -> Bool {
-        var request = URLRequest(url: url.appendingPathComponent("/api/v1/ping"))
-        request.httpMethod = "GET"
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        let request = makeRequest(
+            url: url.appendingPathComponent("/api/v1/ping"), method: "GET", apiKey: apiKey)
 
         let (_, response) = try await ephemeralSession.data(for: request)
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
@@ -292,10 +306,15 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
         let fileURL = tempDir.appendingPathComponent(uploadToken + (compressed == nil ? ".json" : ".json.gz"))
         try bodyData.write(to: fileURL)
 
-        var request = URLRequest(url: serverURL.appendingPathComponent("/api/v1/health-sync/post"))
-        request.httpMethod = "POST"
+        // A POST is not cached, so the shared builder's no-cache default would only block
+        // a revalidation the request never needed.
+        var request = makeRequest(
+            url: serverURL.appendingPathComponent("/api/v1/health-sync/post"),
+            method: "POST",
+            apiKey: apiKey,
+            cachePolicy: .useProtocolCachePolicy
+        )
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         if compressed != nil {
             request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
         }
@@ -356,11 +375,7 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
         components.queryItems = [URLQueryItem(name: "timeScale", value: timeScale)]
         guard let url = components.url else { throw URLError(.badURL) }
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
+        let request = makeRequest(url: url, method: "GET", apiKey: apiKey, deviceId: deviceId)
 
         let (data, response) = try await ephemeralSession.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
