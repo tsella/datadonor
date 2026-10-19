@@ -102,39 +102,42 @@ final class BackgroundSyncManager {
     // MARK: - Task handlers
 
     private func handleAppRefresh(task: BGAppRefreshTask) {
-        // Re-arm before doing anything: if this run is killed, the next one must already
-        // be queued, or the chain stops until the app is opened by hand.
-        scheduleAppRefresh()
-        scheduleProcessing()
+        handle(task: task, reconcileAnchors: false, origin: "app refresh") {
+            self.scheduleAppRefresh()
+            self.scheduleProcessing()
+        }
+    }
 
-        let complete = appRefreshCompleter(for: task)
+    private func handleProcessing(task: BGProcessingTask) {
+        handle(task: task, reconcileAnchors: true, origin: "processing sweep") {
+            self.scheduleProcessing()
+        }
+    }
+
+    /// Both wake paths differ only in which requests they re-arm, whether anchors are
+    /// reconciled and what the log calls them. Keeping two copies meant fixing the expiry
+    /// or cancellation path twice.
+    private func handle(
+        task: BGTask,
+        reconcileAnchors: Bool,
+        origin: String,
+        rearm: @escaping () -> Void
+    ) {
+        // Re-arm before doing anything: if this run is killed, the next one must already be
+        // queued, or the chain stops until the app is opened by hand.
+        rearm()
+
+        let complete = completer(for: task)
         let manager = healthQueryManager
         let work = Task { @MainActor in
-            let ok = await self.runSync(types: nil, reconcileAnchors: false, origin: "app refresh")
+            let ok = await self.runSync(types: nil, reconcileAnchors: reconcileAnchors, origin: origin)
             complete(ok)
         }
 
         task.expirationHandler = {
             // iOS is reclaiming our runtime. Stop cleanly so the anchor logic doesn't
             // advance past a batch we can no longer confirm.
-            DataDonorLogger.shared.log("Background sync expired; cancelling.", level: .warn)
-            work.cancel()
-            Task { @MainActor in manager?.cancelSync() }
-        }
-    }
-
-    private func handleProcessing(task: BGProcessingTask) {
-        scheduleProcessing()
-
-        let complete = processingCompleter(for: task)
-        let manager = healthQueryManager
-        let work = Task { @MainActor in
-            let ok = await self.runSync(types: nil, reconcileAnchors: true, origin: "processing sweep")
-            complete(ok)
-        }
-
-        task.expirationHandler = {
-            DataDonorLogger.shared.log("Processing sweep expired; cancelling.", level: .warn)
+            DataDonorLogger.shared.log("\(origin) expired; cancelling.", level: .warn)
             work.cancel()
             Task { @MainActor in manager?.cancelSync() }
         }
@@ -142,14 +145,7 @@ final class BackgroundSyncManager {
 
     /// One-shot completion, so an expiry that races the finish cannot call
     /// `setTaskCompleted` twice.
-    private func appRefreshCompleter(for task: BGAppRefreshTask) -> @Sendable (Bool) -> Void {
-        let gate = CompletionGate()
-        return { success in
-            gate.fire { task.setTaskCompleted(success: success) }
-        }
-    }
-
-    private func processingCompleter(for task: BGProcessingTask) -> @Sendable (Bool) -> Void {
+    private func completer(for task: BGTask) -> @Sendable (Bool) -> Void {
         let gate = CompletionGate()
         return { success in
             gate.fire { task.setTaskCompleted(success: success) }
