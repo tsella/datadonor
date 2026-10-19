@@ -1,6 +1,7 @@
 import Foundation
+import Security
 
-/// Single source of truth for "which server should we talk to?".
+/// Single source of truth for "which server should we talk to?" and server credentials.
 ///
 /// Previously the dashboard, the sync button, and the background task each answered this
 /// differently, so the UI could report a server the sync path never used. `URL(string:)`
@@ -8,6 +9,65 @@ import Foundation
 /// "192.168.1.5:8443" or "myserver", which then takes precedence over a valid discovered
 /// server and fails every request with an opaque error.
 enum ServerResolver {
+
+    // MARK: - API Key (Keychain-backed with UserDefaults migration)
+
+    private static let keychainService = "la.tsel.datadonor"
+    private static let keychainAccount = "apiKey"
+    private static let legacyApiKeyDefaultsKey = "apiKey"
+
+    /// Reads the API key from the Keychain, migrating any legacy plaintext value from
+    /// `UserDefaults` on first access. Uses `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`
+    /// so background sync tasks can read the key while the device is locked.
+    static func loadApiKey() -> String {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: keychainAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecSuccess,
+           let data = item as? Data,
+           let key = String(data: data, encoding: .utf8),
+           !key.isEmpty {
+            // Clean up any leftover plaintext copy in UserDefaults.
+            if UserDefaults.standard.string(forKey: legacyApiKeyDefaultsKey) != nil {
+                UserDefaults.standard.removeObject(forKey: legacyApiKeyDefaultsKey)
+            }
+            return key
+        }
+
+        // One-time migration from legacy UserDefaults storage.
+        if let legacy = UserDefaults.standard.string(forKey: legacyApiKeyDefaultsKey),
+           !legacy.isEmpty {
+            saveApiKey(legacy)
+            UserDefaults.standard.removeObject(forKey: legacyApiKeyDefaultsKey)
+            return legacy
+        }
+        return ""
+    }
+
+    static func saveApiKey(_ newValue: String) {
+        let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: keychainAccount
+        ]
+        SecItemDelete(baseQuery as CFDictionary)
+        UserDefaults.standard.removeObject(forKey: legacyApiKeyDefaultsKey)
+
+        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { return }
+        var addQuery = baseQuery
+        addQuery[kSecValueData as String] = data
+        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        SecItemAdd(addQuery as CFDictionary, nil)
+    }
+
+    // MARK: - URL Resolution
 
     /// Parses a user-entered override, rejecting anything that isn't a usable absolute URL.
     static func parseOverride(_ raw: String) -> URL? {
@@ -86,9 +146,15 @@ enum ServerResolver {
         return approvedServers().contains { $0.lowercased() == target }
     }
 
-    /// Hosts the user approved, canonicalized for comparison against a TLS challenge host.
+    /// Hosts the user approved (including any explicit custom override URL), canonicalized
+    /// for comparison against a TLS challenge host.
     static func approvedHosts() -> Set<String> {
-        Set(approvedServers().compactMap { URL(string: $0)?.host.map(canonicalHost) })
+        var hosts = Set(approvedServers().compactMap { URL(string: $0)?.host.map(canonicalHost) })
+        let override = UserDefaults.standard.string(forKey: "customServerURL") ?? ""
+        if let overrideHost = parseOverride(override)?.host {
+            hosts.insert(canonicalHost(overrideHost))
+        }
+        return hosts
     }
 
     /// Adds a server to the approved list. Idempotent across casing differences.

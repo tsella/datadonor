@@ -19,17 +19,29 @@ final class ServerTrustStore: @unchecked Sendable {
 
     private let pinsKey = "pinnedServerKeys"
     private let lock = NSLock()
+    private var cachedPins: [String: String]
 
-    private init() {}
+    private init() {
+        self.cachedPins = UserDefaults.standard.dictionary(forKey: pinsKey) as? [String: String] ?? [:]
+    }
 
     private func pins() -> [String: String] {
-        UserDefaults.standard.dictionary(forKey: pinsKey) as? [String: String] ?? [:]
+        cachedPins
+    }
+
+    private func persist(_ snapshot: [String: String]) {
+        if Thread.isMainThread {
+            UserDefaults.standard.set(snapshot, forKey: pinsKey)
+        } else {
+            DispatchQueue.main.async { [pinsKey] in
+                UserDefaults.standard.set(snapshot, forKey: pinsKey)
+            }
+        }
     }
 
     private func store(pin: String, for host: String) {
-        var current = pins()
-        current[normalize(host)] = pin
-        UserDefaults.standard.set(current, forKey: pinsKey)
+        cachedPins[normalize(host)] = pin
+        persist(cachedPins)
     }
 
     /// Hostnames are case-insensitive, and the two sides disagree in practice: Bonjour
@@ -44,12 +56,13 @@ final class ServerTrustStore: @unchecked Sendable {
     /// connection. Called when the user removes a server from the approved list.
     func forget(host: String) {
         lock.lock()
-        defer { lock.unlock() }
         // Drop every entry matching case-insensitively: pins written by older builds were
         // keyed by the raw host, so a stale `Mac.lan` entry can sit beside `mac.lan`.
         let target = normalize(host)
-        let current = pins().filter { normalize($0.key) != target }
-        UserDefaults.standard.set(current, forKey: pinsKey)
+        cachedPins = cachedPins.filter { normalize($0.key) != target }
+        let snapshot = cachedPins
+        lock.unlock()
+        persist(snapshot)
     }
 
     func evaluate(serverTrust: SecTrust, host: String) -> Evaluation {
