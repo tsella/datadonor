@@ -67,6 +67,30 @@ the live archive and the meal scripts on this machine, so it is a local check,
 not a CI job. It reports a hard failure when a dashboard day disagrees with the
 scripts that write the the daily report reports.
 
+## Background sync
+
+Three wake paths, fastest first:
+
+- HealthKit observers on steps, heart rate, active energy, resting HR, HRV, body mass,
+  sleep and workouts. Each wake syncs the type that changed inside a
+  `beginBackgroundTask`, because the callback's own runtime is a few seconds.
+- `BGAppRefreshTask` (`la.tsel.datadonor.backgroundSync`) for the periodic delta.
+- `BGProcessingTask` (`la.tsel.datadonor.fullSync`) for the full 46-type sweep, which
+  does not fit a refresh window.
+
+iOS decides when a background task runs; the `earliestBeginDate` values are floors, not a
+cadence. Observers are process-bound and are registered on every launch, so a force-quit
+stops them until the app is opened again.
+
+To trigger a task by hand in Xcode, pause the debugger and run:
+
+```
+e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"la.tsel.datadonor.backgroundSync"]
+```
+
+Uploads are visible on the server: `server/logs/datadonor-*.log` logs `Ingested N new
+metric(s)` per batch, and a run that finds nothing new still posts a heartbeat.
+
 ## Server Specification
 This app requires a backend server to receive the data. See the `server_specification.md` document for the full JSON payload specifications, checkpoint syncing mechanics, and endpoint requirements.
 

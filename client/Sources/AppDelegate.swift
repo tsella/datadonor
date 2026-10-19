@@ -1,6 +1,7 @@
 import UIKit
 import BackgroundTasks
 
+@MainActor
 class AppDelegate: NSObject, UIApplicationDelegate {
 
     // We hold a reference to our sync engine to handle background events
@@ -10,15 +11,20 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
 
-        // Register Background Task. The API key is deliberately not captured here — the
-        // handler reads it at execution time so key changes take effect without a relaunch.
-        BackgroundSyncManager.shared.registerBackgroundTasks(
+        // Registration must happen before this method returns. The API key is deliberately
+        // not captured here: the handlers read it at execution time, so key changes take
+        // effect without a relaunch.
+        BackgroundSyncManager.shared.configure(
             syncEngine: syncEngine,
             healthQueryManager: healthQueryManager
         )
+        BackgroundSyncManager.shared.registerBackgroundTasks()
 
-        // Registration alone never runs anything; a request has to be submitted.
+        // Registration alone never runs anything; a request has to be submitted. Both are
+        // queued: an app refresh for the delta, a processing window for a sweep that does
+        // not fit in a 30-second refresh.
         BackgroundSyncManager.shared.scheduleAppRefresh()
+        BackgroundSyncManager.shared.scheduleProcessing()
 
         NotificationManager.shared.requestAuthorization()
 
@@ -35,6 +41,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     func applicationDidEnterBackground(_ application: UIApplication) {
         // Keep a pending request alive across suspensions.
         BackgroundSyncManager.shared.scheduleAppRefresh()
+        BackgroundSyncManager.shared.scheduleProcessing()
     }
 
     func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {

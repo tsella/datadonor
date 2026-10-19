@@ -9,6 +9,8 @@ final class HealthQueryManager: ObservableObject {
     @Published var totalRecordsSynced: Int = UserDefaults.standard.integer(forKey: "totalRecordsSynced")
     private var isCancelled = false
     private var lastUIUpdateTime: Date = .distantPast
+    /// Records accepted by the server during the current run. Drives the heartbeat.
+    private var uploadedRecords = 0
     
     func cancelSync() {
         isCancelled = true
@@ -230,6 +232,7 @@ final class HealthQueryManager: ObservableObject {
                     // Count what we actually sent, not what HealthKit handed us: mapSample
                     // drops samples it cannot represent.
                     self.addSyncedRecords(dataPoints.count)
+                    self.uploadedRecords += dataPoints.count
 
                     if shouldUpdateTimestamp {
                         UserDefaults.standard.set(now.timeIntervalSince1970, forKey: "lastSyncTimestamp")
@@ -283,57 +286,52 @@ final class HealthQueryManager: ObservableObject {
         UserDefaults.standard.synchronize()
     }
     
-    func performSync(syncEngine: SyncEngine, serverURL: URL?, apiKey: String) async {
+    /// - Parameters:
+    ///   - types: restrict the sweep to these types (an observer wake passes the one that
+    ///     changed). Nil means the full sweep.
+    ///   - reconcileAnchors: ask the server what it holds before running. Skipped for
+    ///     observer wakes, where the extra round trip costs most of the runtime window.
+    /// - Returns: true when every type reached its anchor.
+    @discardableResult
+    func performSync(syncEngine: SyncEngine,
+                     serverURL: URL?,
+                     apiKey: String,
+                     types: [HKSampleType]? = nil,
+                     reconcileAnchors: Bool = true) async -> Bool {
         guard let url = serverURL else {
             DataDonorLogger.shared.log("Skipping sync: No server URL resolved.", level: .warn)
-            return
+            return false
         }
         
         // Guard against overlapping runs: discovery, the manual button and the background
         // task can all fire performSync, and concurrent runs corrupt the shared anchors.
         guard !isSyncing else {
             DataDonorLogger.shared.log("Skipping sync: another sync is already running.", level: .info)
-            return
+            return false
         }
 
         DataDonorLogger.shared.log("Starting health data extraction loop.", level: .info)
 
         isSyncing = true
         isCancelled = false
+        uploadedRecords = 0
 
         defer { isSyncing = false }
 
         let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? "unknown"
-        do {
-            if let checkpointData = try await syncEngine.fetchServerCheckpoint(serverURL: url, apiKey: apiKey, deviceId: deviceId) {
-                let serverAnchors = checkpointData.checkpoints
-                
-                // Align local record count with server's actual count
-                setSyncedRecords(checkpointData.totalRecords)
 
-                if serverAnchors.isEmpty {
-                    DataDonorLogger.shared.log("Server has no data for device. Resetting local anchors to force full resync.", level: .info)
-                    self.resetAllAnchors()
-                } else {
-                    DataDonorLogger.shared.log("Received server checkpoints. Overwriting local state.", level: .info)
-                    self.wipeLocalAnchorsOnly() // Wipe local anchor state first, preserving sync counts
-                    for (dataType, base64Str) in serverAnchors {
-                        if let data = Data(base64Encoded: base64Str) {
-                            UserDefaults.standard.set(data, forKey: "anchor_\(dataType)")
-                        }
-                    }
-                }
-            } else {
-                DataDonorLogger.shared.log("Failed to fetch server checkpoints (nil response). Proceeding with local state.", level: .warn)
-            }
-        } catch {
-            DataDonorLogger.shared.log("Failed to fetch server checkpoint: \(error)", level: .warn)
+        if reconcileAnchors {
+            await reconcileAnchorState(syncEngine: syncEngine, serverURL: url, apiKey: apiKey, deviceId: deviceId)
         }
-        
-        let allQuantities = getAllSupportedQuantityTypes().compactMap { HKObjectType.quantityType(forIdentifier: $0) }
-        let allCategories = getAllSupportedCategoryTypes().compactMap { HKObjectType.categoryType(forIdentifier: $0) }
-        let allWorkouts = getAllSupportedWorkoutTypes()
-        let allTypes: [HKSampleType] = allQuantities + allCategories + allWorkouts
+
+        let allTypes: [HKSampleType]
+        if let types {
+            allTypes = types
+        } else {
+            let quantityTypes = getAllSupportedQuantityTypes().compactMap { HKObjectType.quantityType(forIdentifier: $0) }
+            let categoryTypes = getAllSupportedCategoryTypes().compactMap { HKObjectType.categoryType(forIdentifier: $0) }
+            allTypes = quantityTypes + categoryTypes + getAllSupportedWorkoutTypes()
+        }
         
         var failedTypes: [String] = []
         for sampleType in allTypes {
@@ -358,6 +356,103 @@ final class HealthQueryManager: ObservableObject {
                 level: .warn)
             NotificationManager.shared.sendSyncErrorNotification(
                 message: "\(failedTypes.count) data type(s) failed to upload and will retry on the next sync.")
+        }
+
+        // Heartbeat. A run that uploaded nothing still tells the server this device is
+        // alive and which anchors it holds, so "nothing new today" stays distinguishable
+        // from "the app stopped syncing". Without it the two look identical in the archive.
+        if uploadedRecords == 0 && !isCancelled {
+            await sendHeartbeat(syncEngine: syncEngine, serverURL: url, apiKey: apiKey, deviceId: deviceId)
+        }
+
+        return failedTypes.isEmpty && !isCancelled
+    }
+
+    /// Decides which anchor set to trust.
+    ///
+    /// This used to replace local anchors with the server's on every run. When an earlier
+    /// upload failed, the server's anchor was behind and the app re-walked ranges it had
+    /// already delivered, lengthening each run and raising the chance of another expiry.
+    /// A type now keeps its local anchor unless the app holds none at all, which is the
+    /// reinstall case the server copy exists for.
+    ///
+    /// Consequence: a server restored from an older backup will not pull the archive back
+    /// by itself. "Reset sync state" is the deliberate path for that.
+    private func reconcileAnchorState(syncEngine: SyncEngine, serverURL: URL, apiKey: String, deviceId: String) async {
+        let localAnchorKeys = Set(
+            UserDefaults.standard.dictionaryRepresentation().keys.filter { $0.hasPrefix("anchor_") }
+        )
+
+        do {
+            guard let checkpointData = try await syncEngine.fetchServerCheckpoint(
+                serverURL: serverURL, apiKey: apiKey, deviceId: deviceId) else {
+                DataDonorLogger.shared.log(
+                    "Failed to fetch server checkpoints (nil response). Proceeding with local state.", level: .warn)
+                return
+            }
+
+            setSyncedRecords(max(checkpointData.totalRecords, totalRecordsSynced))
+
+            if checkpointData.checkpoints.isEmpty {
+                DataDonorLogger.shared.log("Server holds no checkpoints for this device.", level: .info)
+                if localAnchorKeys.isEmpty {
+                    DataDonorLogger.shared.log("No local anchors either: forcing a full resync.", level: .info)
+                    resetAllAnchors()
+                }
+                return
+            }
+
+            if localAnchorKeys.isEmpty {
+                DataDonorLogger.shared.log("No local anchors; seeding them from the server.", level: .info)
+                for (dataType, base64Str) in checkpointData.checkpoints {
+                    if let data = Data(base64Encoded: base64Str) {
+                        UserDefaults.standard.set(data, forKey: "anchor_\(dataType)")
+                    }
+                }
+                return
+            }
+
+            var seeded = 0
+            for (dataType, base64Str) in checkpointData.checkpoints where !localAnchorKeys.contains("anchor_\(dataType)") {
+                if let data = Data(base64Encoded: base64Str) {
+                    UserDefaults.standard.set(data, forKey: "anchor_\(dataType)")
+                    seeded += 1
+                }
+            }
+            DataDonorLogger.shared.log(
+                "Kept \(localAnchorKeys.count) local anchor(s); seeded \(seeded) missing one(s) from the server.",
+                level: .info)
+        } catch {
+            DataDonorLogger.shared.log(
+                "Failed to fetch server checkpoint: \(error.localizedDescription). Proceeding with local state.",
+                level: .warn)
+        }
+    }
+
+    /// Posts the local anchors with an empty data array. The server accepts it, refreshes
+    /// the checkpoint timestamp and writes no rows.
+    private func sendHeartbeat(syncEngine: SyncEngine, serverURL: URL, apiKey: String, deviceId: String) async {
+        var anchors: [String: String] = [:]
+        for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("anchor_") {
+            if let data = UserDefaults.standard.data(forKey: key) {
+                anchors[String(key.dropFirst("anchor_".count))] = data.base64EncodedString()
+            }
+        }
+        guard !anchors.isEmpty else { return }
+
+        let payload = HealthDataPayload(
+            deviceId: deviceId,
+            syncTimestamp: ISO8601DateFormatter().string(from: Date()),
+            data: [],
+            anchors: anchors,
+            deletedUuids: nil
+        )
+        do {
+            let encoded = try JSONEncoder().encode(payload)
+            try await syncEngine.sync(payload: encoded, serverURL: serverURL, apiKey: apiKey, timeout: 30)
+            DataDonorLogger.shared.log("Heartbeat sent with \(anchors.count) anchor(s).", level: .debug)
+        } catch {
+            DataDonorLogger.shared.log("Heartbeat failed: \(error.localizedDescription)", level: .warn)
         }
     }
 }
