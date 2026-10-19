@@ -57,15 +57,11 @@ a missing binding, run `npm install-scripts approve sqlite3` or
 ## Tests
 
 ```
-cd server && npm test                  # auth, ingest idempotency, gzip limits, buckets
-cd dashboard && npm test               # unit tests against a throwaway database
-cd dashboard && npm run test:parity    # whole days compared with the Python meal scripts
+cd server && npm test        # auth, ingest idempotency, gzip limits, buckets
+cd dashboard && npm test     # unit tests against a throwaway database
 ```
 
-The two `npm test` suites are self-contained and run in CI. The parity run reads
-the live archive and the meal scripts on this machine, so it is a local check,
-not a CI job. It reports a hard failure when a dashboard day disagrees with the
-scripts that write the the daily report reports.
+Both suites are self-contained and run in CI.
 
 ## Background sync
 
@@ -97,10 +93,6 @@ This app requires a backend server to receive the data. See the `server_specific
 ## Data Analysis Examples
 Want to visualize the data once it hits the database? We've provided a complete Python guide on extracting, formatting, and plotting your health metrics (like Heart Rate overlaid with Sleep and Exercise times) in the [`data_analysis_examples.md`](data_analysis_examples.md) document.
 
-## the agent runtime Agent Integration
-A skill for the the agent runtime agent ([https://example.com](https://example.com)) has been added to interact with the DataDonor database. 
-*Note: This is an interim solution. Future enhancements will use a cleaner, dedicated API for integrations.*
-
 ## Deployment to Personal Device
 To run DataDonor on your personal iPhone, you must build and deploy it directly from Xcode. Please note that Apple requires an Apple Developer account to deploy custom apps that utilize HealthKit entitlements to a physical device.
 
@@ -114,12 +106,6 @@ To run DataDonor on your personal iPhone, you must build and deploy it directly 
 ⚠️ **IMPORTANT**: DataDonor is designed to give you complete ownership and control over your personal health data by extracting it from Apple's ecosystem and transmitting it to your own self-hosted server. 
 
 Because this data contains highly sensitive personal, medical, and biometric information, **it is entirely your responsibility to secure your backend infrastructure.** Ensure that your server is properly firewalled, uses encryption at rest, and that your API keys and self-signed certificates are kept strictly confidential. The developers of DataDonor are not responsible for any data leaks, breaches, or mishandling of information once it leaves the iOS sandbox and is transmitted to your local server.
-
-## Author
-DataDonor contributors (<noreply@example.com>)
-
-## Repository
-[https://github.com/example/datadonor](https://github.com/example/datadonor)
 
 ## License
 MIT. See [LICENSE](LICENSE).

@@ -6,7 +6,7 @@
  * projects any registered metric out of those frames. Every endpoint goes
  * through here, so the dashboard has exactly one definition of "a day" and one
  * definition of "the deficit" — the failure mode being designed out is the old
- * one, where the page and the the daily report report disagreed about the same date.
+ * one, where the page and the daily report disagreed about the same date.
  *
  * Day bucketing uses the travel-aware offset (see time.js), and each frame
  * carries its own `quality` block, so a provisional day is identifiable by

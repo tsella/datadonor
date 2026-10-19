@@ -22,3 +22,6 @@ server/certs/
 *.sqlite3
 *-shm
 *-wal
+
+# Per-machine settings, not part of the project
+ecosystem.local.js

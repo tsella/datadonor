@@ -58,7 +58,7 @@ const METRICS = {
     kind: 'derived',
     agg: 'sum',
     /* POSITIVE means a deficit (out above in), which is the convention every
-       other part of this system uses — the EOD report, the the daily report replies and
+       other part of this system uses — the daily report, the daily reports and
        the planned 500. Signed the other way it drew as a negative bar sitting
        under a positive plan line. */
     get: (f) => (num(f.intake && f.intake.kcal) !== null && num(f.out && f.out.total) !== null

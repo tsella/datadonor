@@ -1,8 +1,8 @@
 'use strict';
 /**
  * Travel-aware local time — a direct port of the rules in `meal_macros.py`, so
- * the dashboard buckets days EXACTLY like the meal scripts. If these two ever
- * disagree, every number here contradicts the the daily report reports.
+ * the dashboard buckets days EXACTLY like the reference scripts. If these two ever
+ * disagree, every number here contradicts the daily reports.
  *
  * The rule that matters: the active timezone is the most recent leg already
  * LANDED, keyed on the arrival INSTANT rather than the landing date. A return

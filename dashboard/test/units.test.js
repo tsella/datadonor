@@ -5,7 +5,7 @@
  *
  * These run against a throwaway database built in the test, so they hold without
  * the live archive. The live cross-check is `npm run test:parity`, which compares
- * whole days against the Python meal scripts.
+ * whole days against the reference Python scripts.
  */
 const test = require('node:test');
 const assert = require('node:assert');

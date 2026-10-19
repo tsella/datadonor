@@ -7,9 +7,9 @@
  *   target  — the plan issued that morning (`daily_targets`), plus the EOD's
  *             own measured totals once the day was finalised
  *
- * The dashboard reads both and never recomputes either: the meal scripts own
+ * The dashboard reads both and never recomputes either: the reference scripts own
  * that math, and a second implementation here would disagree with the
- * the daily report reports within a week.
+ * daily reports within a week.
  */
 const { all } = require('../db');
 

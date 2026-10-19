@@ -10,6 +10,15 @@
  */
 const path = require('path');
 
+/* Optional per-machine settings (database paths, timezone, bind address). The
+   file is gitignored, so a fresh clone has none and every default still works. */
+let local = {};
+try {
+  local = require('./ecosystem.local.js');
+} catch (err) {
+  local = {};
+}
+
 module.exports = {
   apps: [
     {
@@ -23,6 +32,7 @@ module.exports = {
       max_memory_restart: '1G',
       env: {
         NODE_ENV: 'production',
+        ...(local.server || {}),
       },
     },
     {
@@ -36,6 +46,7 @@ module.exports = {
       max_memory_restart: '512M',
       env: {
         NODE_ENV: 'production',
+        ...(local.dashboard || {}),
       },
     },
   ],
