@@ -98,17 +98,26 @@ struct LogViewer: View {
         }
     }
     
+    @MainActor
     private func loadLogs() async {
         let lines = await DataDonorLogger.shared.readAllLogs()
+        let parsed = await Task.detached(priority: .userInitiated) {
+            Self.parseLines(lines)
+        }.value
+        self.entries = parsed
+    }
+
+    nonisolated private static func parseLines(_ lines: [String]) -> [LogEntry] {
         var parsed: [LogEntry] = []
-        
+        parsed.reserveCapacity(lines.count)
+        let brackets = CharacterSet(charactersIn: " [")
+
         for line in lines {
             if line.hasPrefix("[") {
                 let parts = line.split(separator: "]", maxSplits: 2, omittingEmptySubsequences: false)
                 if parts.count >= 3 {
                     // Lines look like "[LEVEL] [TIMESTAMP] message". Trim both the space and
                     // the bracket — trimming whitespace alone left a stray "[" on timestamps.
-                    let brackets = CharacterSet(charactersIn: " [")
                     let levelStr = parts[0].trimmingCharacters(in: brackets)
                     let timeStr = parts[1].trimmingCharacters(in: brackets)
                     let msgStr = parts[2].trimmingCharacters(in: .whitespaces)
@@ -118,9 +127,9 @@ struct LogViewer: View {
                 }
             }
         }
-        
+
         // Reverse to show newest logs at the top
-        self.entries = parsed.reversed()
+        return parsed.reversed()
     }
     
     private func color(for level: LogLevel) -> Color {

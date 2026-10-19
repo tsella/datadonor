@@ -18,6 +18,9 @@ final class DataDonorLogger: @unchecked Sendable {
     private let logQueue = DispatchQueue(label: "la.tsel.datadonor.logger")
     private let maxDaysToKeep = 7
     
+    private var currentLogDateString: String?
+    private var currentFileHandle: FileHandle?
+    
     private var logsDirectory: URL {
         let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
         let docsDirectory = paths[0]
@@ -29,14 +32,17 @@ final class DataDonorLogger: @unchecked Sendable {
         return logsDir
     }
     
-    private var dateFormatter: DateFormatter = {
+    // Accessed exclusively on `logQueue` (DateFormatter is not thread-safe).
+    private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter
     }()
     
-    private var timestampFormatter: DateFormatter = {
+    private let timestampFormatter: DateFormatter = {
         let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
         return formatter
     }()
@@ -45,27 +51,57 @@ final class DataDonorLogger: @unchecked Sendable {
         cleanOldLogs()
     }
     
+    private func fileHandle(for dateString: String) -> FileHandle? {
+        if currentLogDateString == dateString, let handle = currentFileHandle {
+            return handle
+        }
+        
+        try? currentFileHandle?.close()
+        currentFileHandle = nil
+        currentLogDateString = nil
+        
+        let fileURL = logsDirectory.appendingPathComponent("log_\(dateString).txt")
+        if !FileManager.default.fileExists(atPath: fileURL.path) {
+            FileManager.default.createFile(
+                atPath: fileURL.path,
+                contents: nil,
+                attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
+            )
+        }
+        
+        guard let handle = try? FileHandle(forWritingTo: fileURL) else {
+            return nil
+        }
+        _ = try? handle.seekToEnd()
+        currentLogDateString = dateString
+        currentFileHandle = handle
+        return handle
+    }
+    
     func log(_ message: String, level: LogLevel = .info) {
         let date = Date()
-        let dateString = dateFormatter.string(from: date)
-        let timestamp = timestampFormatter.string(from: date)
-        let logLine = "[\(level.rawValue)] [\(timestamp)] \(message)\n"
         
-        #if DEBUG
-        print(logLine, terminator: "")
-        #endif
-        
-        logQueue.async {
-            let fileURL = self.logsDirectory.appendingPathComponent("log_\(dateString).txt")
-            if let data = logLine.data(using: .utf8) {
-                if FileManager.default.fileExists(atPath: fileURL.path) {
-                    if let fileHandle = try? FileHandle(forWritingTo: fileURL) {
-                        fileHandle.seekToEndOfFile()
-                        fileHandle.write(data)
-                        fileHandle.closeFile()
+        logQueue.async { [self] in
+            let dateString = dateFormatter.string(from: date)
+            let timestamp = timestampFormatter.string(from: date)
+            let logLine = "[\(level.rawValue)] [\(timestamp)] \(message)\n"
+            
+            #if DEBUG
+            print(logLine, terminator: "")
+            #endif
+            
+            guard let data = logLine.data(using: .utf8) else { return }
+            if let handle = fileHandle(for: dateString) {
+                do {
+                    try handle.write(contentsOf: data)
+                } catch {
+                    // Handle may have been invalidated if the file was removed; reopen once.
+                    try? currentFileHandle?.close()
+                    currentFileHandle = nil
+                    currentLogDateString = nil
+                    if let retryHandle = fileHandle(for: dateString) {
+                        try? retryHandle.write(contentsOf: data)
                     }
-                } else {
-                    try? data.write(to: fileURL)
                 }
             }
         }
@@ -74,16 +110,16 @@ final class DataDonorLogger: @unchecked Sendable {
     private func cleanOldLogs() {
         logQueue.async {
             let calendar = Calendar.current
-            let cutoffDate = calendar.date(byAdding: .day, value: -self.maxDaysToKeep, to: Date())!
+            guard let cutoffDate = calendar.date(byAdding: .day, value: -self.maxDaysToKeep, to: Date()) else {
+                return
+            }
             
             do {
                 let files = try FileManager.default.contentsOfDirectory(at: self.logsDirectory, includingPropertiesForKeys: [.creationDateKey])
                 for file in files where file.pathExtension == "txt" {
                     let attrs = try FileManager.default.attributesOfItem(atPath: file.path)
-                    if let creationDate = attrs[.creationDate] as? Date {
-                        if creationDate < cutoffDate {
-                            try FileManager.default.removeItem(at: file)
-                        }
+                    if let creationDate = attrs[.creationDate] as? Date, creationDate < cutoffDate {
+                        try FileManager.default.removeItem(at: file)
                     }
                 }
             } catch {
@@ -99,6 +135,7 @@ final class DataDonorLogger: @unchecked Sendable {
                     continuation.resume(returning: [])
                     return
                 }
+                try? self.currentFileHandle?.synchronize()
                 var allLines: [String] = []
                 do {
                     let files = try FileManager.default.contentsOfDirectory(at: self.logsDirectory, includingPropertiesForKeys: [.creationDateKey])
