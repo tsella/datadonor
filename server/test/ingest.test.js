@@ -125,7 +125,7 @@ test('a delete from another device leaves the row alone', async () => {
   assert.strictEqual(rows[0].n, 1, 'row still present');
 });
 
-test('the owning device can delete its own row', async () => {
+test('the owning device can delete its own row and stats decrement accordingly', async () => {
   const res = await post({
     device_id: 'device-d',
     data: [],
@@ -133,6 +133,32 @@ test('the owning device can delete its own row', async () => {
     anchors: {},
   });
   assert.strictEqual(res.json.deleted, 1);
+
+  const stats = await query(
+    srv.dbFile,
+    'SELECT record_count FROM daily_sync_stats WHERE device_id = ?',
+    ['device-d'],
+  );
+  assert.strictEqual(stats[0].record_count, 0, 'daily_sync_stats decremented to 0');
+
+  const cp = await srv.call('/api/v1/health-sync/checkpoint', {
+    headers: { 'X-Device-ID': 'device-d' },
+  });
+  assert.strictEqual(cp.json.total_records, 0, 'checkpoint total_records reflects deletion');
+});
+
+test('a record without a type, end_date, or value is refused with 400', async () => {
+  const noType = samplePayload('device-c');
+  delete noType.data[0].type;
+  assert.strictEqual((await post(noType)).status, 400);
+
+  const noEnd = samplePayload('device-c');
+  delete noEnd.data[0].end_date;
+  assert.strictEqual((await post(noEnd)).status, 400);
+
+  const noVal = samplePayload('device-c');
+  delete noVal.data[0].value;
+  assert.strictEqual((await post(noVal)).status, 400);
 });
 
 test('anchors come back through the checkpoint endpoint', async () => {

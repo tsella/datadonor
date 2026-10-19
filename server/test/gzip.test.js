@@ -46,6 +46,11 @@ test('malformed JSON is refused with 400, not 500', async () => {
   assert.strictEqual(res.status, 400);
 });
 
+test('an unsupported Content-Encoding is refused with 415', async () => {
+  const res = await send('{"device_id":"x","data":[]}', { 'Content-Encoding': 'br' });
+  assert.strictEqual(res.status, 415);
+});
+
 test('a small body that expands past the guard is refused', async () => {
   /* The limit is lowered to 4 KB through config.limits for this run only. A real
      200 MB bomb would have to allocate 200 MB to prove the same branch. */
