@@ -17,12 +17,12 @@ class ServerDiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
     }
     
     func startDiscovery() {
-        print("[Bonjour] Starting discovery for _datadonor._tcp in domain local.")
+        DataDonorLogger.shared.log("Discovery: searching for _datadonor._tcp in local.", level: .debug)
         browser.searchForServices(ofType: "_datadonor._tcp", inDomain: "local.")
     }
     
     func stopDiscovery() {
-        print("[Bonjour] Stopping discovery.")
+        DataDonorLogger.shared.log("Discovery: stopped.", level: .debug)
         browser.stop()
         resolvingServices.removeAll()
     }
@@ -30,27 +30,27 @@ class ServerDiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
     // MARK: - NetServiceBrowserDelegate
     
     func netServiceBrowserWillSearch(_ browser: NetServiceBrowser) {
-        print("[Bonjour] Browser will search.")
+        DataDonorLogger.shared.log("Discovery: browser will search.", level: .debug)
     }
     
     func netServiceBrowserDidStopSearch(_ browser: NetServiceBrowser) {
-        print("[Bonjour] Browser did stop search.")
+        DataDonorLogger.shared.log("Discovery: browser stopped searching.", level: .debug)
     }
     
     func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String : NSNumber]) {
-        print("[Bonjour] Browser did not search. Error: \(errorDict)")
+        DataDonorLogger.shared.log("Discovery: browser did not search: \(errorDict)", level: .warn)
     }
     
     func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
-        print("[Bonjour] Found service: \(service.name) (type: \(service.type), domain: \(service.domain))")
+        DataDonorLogger.shared.log("Discovery: found \(service.name) (\(service.type), \(service.domain)).", level: .debug)
         service.delegate = self
         resolvingServices.append(service)
-        print("[Bonjour] Attempting to resolve service: \(service.name)")
+        DataDonorLogger.shared.log("Discovery: resolving \(service.name).", level: .debug)
         service.resolve(withTimeout: 5.0)
     }
     
     func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
-        print("[Bonjour] Removed service: \(service.name)")
+        DataDonorLogger.shared.log("Discovery: removed \(service.name).", level: .debug)
         resolvingServices.removeAll(where: { $0 == service })
     }
     
@@ -58,7 +58,7 @@ class ServerDiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
     
     func netServiceDidResolveAddress(_ sender: NetService) {
         guard let hostName = sender.hostName else {
-            print("[Bonjour] Service resolved but hostName is nil: \(sender.name)")
+            DataDonorLogger.shared.log("Discovery: \(sender.name) resolved without a host name.", level: .warn)
             return
         }
         
@@ -68,10 +68,10 @@ class ServerDiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
         }
         
         let port = sender.port
-        print("[Bonjour] Service resolved successfully! Host: \(cleanHost), Port: \(port)")
+        DataDonorLogger.shared.log("Discovery: resolved \(cleanHost):\(port).", level: .info)
         
         if let url = URL(string: "https://\(cleanHost):\(port)") {
-            print("[Bonjour] Constructed URL: \(url.absoluteString)")
+            DataDonorLogger.shared.log("Discovery: candidate \(url.absoluteString).", level: .debug)
             DispatchQueue.main.async {
                 if ServerResolver.isApproved(url) {
                     self.activeServerURL = url
@@ -89,7 +89,7 @@ class ServerDiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
     }
     
     func netService(_ sender: NetService, didNotResolve errorDict: [String : NSNumber]) {
-        print("[Bonjour] Failed to resolve service \(sender.name). Error: \(errorDict)")
+        DataDonorLogger.shared.log("Discovery: failed to resolve \(sender.name): \(errorDict)", level: .error)
         resolvingServices.removeAll(where: { $0 == sender })
     }
 }
