@@ -1,0 +1,19 @@
+{
+  "name": "datadonor-dashboard",
+  "version": "1.0.0",
+  "description": "Read-only range dashboard over the DataDonor HealthKit archive and the meal log.",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "test": "node --test test/units.test.js",
+    "test:parity": "node test/parity.js",
+    "test:all": "npm test && npm run test:parity"
+  },
+  "keywords": [],
+  "author": "DataDonor contributors",
+  "license": "MIT",
+  "dependencies": {
+    "ejs": "^6.0.1",
+    "sqlite3": "^6.0.1"
+  }
+}

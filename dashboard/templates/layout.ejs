@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title><%= title %></title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="bar">
+    <div class="bar-left">
+      <h1>DataDonor</h1>
+      <span class="chip" id="tz-label">loading…</span>
+    </div>
+    <div class="bar-right">
+      <button class="preset" data-days="7">7d</button>
+      <button class="preset" data-days="30">30d</button>
+      <button class="preset" data-days="90">90d</button>
+      <button class="preset" data-days="365">1y</button>
+      <label class="fld">From <input type="date" id="from"></label>
+      <label class="fld">To <input type="date" id="to"></label>
+      <label class="fld">Grain
+        <select id="grain">
+          <option value="day">day</option>
+          <option value="week">week</option>
+        </select>
+      </label>
+      <button class="apply" id="apply">Apply</button>
+    </div>
+  </header>
+
+  <!-- Quality warnings: provisional days, sync lag, clamped ranges. -->
+  <div class="banner" id="banner" hidden></div>
+
+  <!-- Rendered from /api/summary. Empty until data arrives; never pre-filled. -->
+  <div class="summary" id="summary"></div>
+
+  <section class="panels">
+    <div class="card">
+      <div class="card-head"><h2>Energy</h2><span class="unit" id="u-energy"></span></div>
+      <canvas id="c-energy"></canvas>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Balance</h2><span class="unit" id="u-balance"></span></div>
+      <canvas id="c-balance"></canvas>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Macros vs targets</h2><span class="unit" id="u-macros"></span></div>
+      <canvas id="c-macros"></canvas>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Weight</h2><span class="unit" id="u-weight"></span></div>
+      <canvas id="c-weight"></canvas>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Recovery</h2><span class="unit" id="u-recovery"></span></div>
+      <canvas id="c-recovery"></canvas>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Training</h2><span class="unit" id="u-training"></span></div>
+      <canvas id="c-training"></canvas>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Ad-hoc chart</h2>
+      <span class="unit">any registered metric, any window — the URL carries it</span>
+    </div>
+    <div class="picker" id="metric-picker"></div>
+    <canvas id="c-custom"></canvas>
+  </section>
+
+  <footer class="foot">
+    <span id="status">loading…</span>
+    <span class="dim">shell rendered <%= generated %> · data fetched live from /api</span>
+  </footer>
+
+</div>
+<script src="/charts.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
