@@ -144,6 +144,15 @@ struct SettingsView: View {
             Section(header: Text("Debugging")) {
                 NavigationLink("View Logs", destination: LogViewer())
             }
+
+            Section(header: Text("About")) {
+                HStack {
+                    Text("Version")
+                    Spacer()
+                    Text(Self.appVersionDescription)
+                        .foregroundColor(.secondary)
+                }
+            }
         }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
@@ -171,6 +180,13 @@ struct SettingsView: View {
             }
             .ignoresSafeArea()
         }
+    }
+
+    private static var appVersionDescription: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "—"
+        let build = info?["CFBundleVersion"] as? String ?? "—"
+        return "\(version) (\(build))"
     }
 
     @MainActor
