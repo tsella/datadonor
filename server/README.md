@@ -1,6 +1,6 @@
 # DataDonor Backend Server
 
-This is the official local-first backend for the DataDonor iOS application. It is a high-performance Node.js Express server utilizing SQLite for lightning-fast, zero-config data ingestion, and PM2 for robust background monitoring.
+This is the official local-first backend for the DataDonor iOS application. It is a high-performance Node.js Fastify server utilizing SQLite for lightning-fast, zero-config data ingestion, and PM2 for robust background monitoring.
 
 ## ⚠️ Critical Security Warning ⚠️
 **DO NOT PORT-FORWARD THIS SERVER TO THE INTERNET.**

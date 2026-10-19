@@ -60,15 +60,15 @@ Before pushing a payload, the app queries this endpoint to determine the last su
 
 ---
 
-### C. Data Ingestion (`/api/v1/health-sync`)
-Receives batches of HealthKit data.
+### C. Data Ingestion (`/api/v1/health-sync/post`)
+Receives batches of HealthKit data (optionally `gzip`-compressed).
 
 * **Method**: `POST`
-* **Path**: `/api/v1/health-sync`
+* **Path**: `/api/v1/health-sync/post`
 * **Headers**:
   * `Authorization: Bearer <your_shared_secret>`
-  * `X-Device-ID`: `<UUID of the iOS Device>`
   * `Content-Type`: `application/json`
+  * `Content-Encoding`: `gzip` *(optional)*
 * **Request Body** (JSON):
   ```json
   {
@@ -76,27 +76,35 @@ Receives batches of HealthKit data.
     "sync_timestamp": "2026-07-31T18:11:33Z",
     "data": [
       {
-        "type": "HeartRate",
+        "uuid": "7A1E2F30-1111-4222-8333-444455556666",
+        "type": "HKQuantityTypeIdentifierHeartRate",
         "value": 72.0,
         "unit": "count/min",
         "start_date": "2026-07-31T18:00:00Z",
         "end_date": "2026-07-31T18:00:00Z",
         "source": "Apple Watch"
-      },
-      {
-        "type": "SleepAnalysis",
-        "value": "InBed",
-        "unit": "category",
-        "start_date": "2026-07-31T22:00:00Z",
-        "end_date": "2026-08-01T06:00:00Z",
-        "source": "iPhone"
       }
-    ]
+    ],
+    "anchors": {
+      "HKQuantityTypeIdentifierHeartRate": "HKQueryAnchor_encoded_string"
+    },
+    "deleted_uuids": []
   }
   ```
 * **Expected Response**:
   * Status: `200 OK` or `201 Created`
   * *Important*: The app relies on a 2xx success code to know it is safe to update its local anchors. If the server fails to persist the data, it MUST return a 4xx or 5xx code so the app retains the anchor and retries on the next sync opportunity.
+
+---
+
+### D. Analytics Summary (`/api/v1/health-sync/stats`)
+Returns aggregated record counts bucketed by category (`Heart Rate`, `Steps`, `Sleep`, `Workouts`) and time grain (`days`, `weeks`, `months`).
+
+* **Method**: `GET`
+* **Path**: `/api/v1/health-sync/stats?timeScale=days|weeks|months`
+* **Headers**:
+  * `Authorization: Bearer <your_shared_secret>`
+  * `X-Device-ID`: `<UUID of the iOS Device>`
 
 ## 4. Data Storage Recommendations
 
