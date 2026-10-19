@@ -9,6 +9,9 @@ final class HealthQueryManager: ObservableObject {
     @Published var totalRecordsSynced: Int = UserDefaults.standard.integer(forKey: "totalRecordsSynced")
     private var isCancelled = false
     private var lastUIUpdateTime: Date = .distantPast
+    /// One formatter for every encoded date. Its output is identical to a fresh instance,
+    /// so per-sample construction only bought setup cost: a 5000-record batch built 5000.
+    private static let iso8601 = ISO8601DateFormatter()
     /// Records accepted by the server during the current run. Drives the heartbeat.
     private var uploadedRecords = 0
     
@@ -63,7 +66,7 @@ final class HealthQueryManager: ObservableObject {
     }
     
     private func mapSample(_ sample: HKSample) -> HealthDataPoint? {
-        let formatter = ISO8601DateFormatter()
+        let formatter = Self.iso8601
         
         let sampleMetadata: [String: String]? = {
             var dict = [String: String]()
@@ -216,7 +219,7 @@ final class HealthQueryManager: ObservableObject {
                 
                 let payload = HealthDataPayload(
                     deviceId: deviceId,
-                    syncTimestamp: ISO8601DateFormatter().string(from: Date()),
+                    syncTimestamp: Self.iso8601.string(from: Date()),
                     data: dataPoints,
                     anchors: [sampleType.identifier: base64Anchor].compactMapValues { $0 },
                     deletedUuids: deletedUuids.isEmpty ? nil : deletedUuids
@@ -462,7 +465,7 @@ final class HealthQueryManager: ObservableObject {
 
         let payload = HealthDataPayload(
             deviceId: deviceId,
-            syncTimestamp: ISO8601DateFormatter().string(from: Date()),
+            syncTimestamp: Self.iso8601.string(from: Date()),
             data: [],
             anchors: anchors,
             deletedUuids: nil
