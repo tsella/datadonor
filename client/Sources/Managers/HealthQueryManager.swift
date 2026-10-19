@@ -19,9 +19,20 @@ final class HealthQueryManager: ObservableObject {
         isCancelled = true
     }
     
-    // Persistent anchors storage
+    // MARK: - Anchor storage
+    //
+    // Anchors live under one prefix, and every scan of them goes through anchorKeys(), so
+    // the prefix is written in one place instead of four.
+
+    private static let anchorPrefix = "anchor_"
+
+    private func anchorKeys() -> [String] {
+        UserDefaults.standard.dictionaryRepresentation().keys
+            .filter { $0.hasPrefix(Self.anchorPrefix) }
+    }
+
     private func getAnchor(for type: String) -> HKQueryAnchor? {
-        if let data = UserDefaults.standard.data(forKey: "anchor_\(type)"),
+        if let data = UserDefaults.standard.data(forKey: Self.anchorPrefix + type),
            let anchor = try? NSKeyedUnarchiver.unarchivedObject(ofClass: HKQueryAnchor.self, from: data) {
             return anchor
         }
@@ -31,8 +42,19 @@ final class HealthQueryManager: ObservableObject {
     private func saveAnchor(_ anchor: HKQueryAnchor?, for type: String) {
         if let anchor = anchor,
            let data = try? NSKeyedArchiver.archivedData(withRootObject: anchor, requiringSecureCoding: true) {
-            UserDefaults.standard.set(data, forKey: "anchor_\(type)")
+            UserDefaults.standard.set(data, forKey: Self.anchorPrefix + type)
         }
+    }
+
+    /// Stores an anchor that arrived from the server as archived bytes, after checking that
+    /// it really is one. A corrupt checkpoint used to be written straight into the anchor
+    /// namespace, where the next read failed and the type started from zero.
+    private func storeAnchorData(_ data: Data, for type: String) {
+        guard (try? NSKeyedUnarchiver.unarchivedObject(ofClass: HKQueryAnchor.self, from: data)) != nil else {
+            DataDonorLogger.shared.log("Ignoring an unreadable anchor for \(type).", level: .warn)
+            return
+        }
+        UserDefaults.standard.set(data, forKey: Self.anchorPrefix + type)
     }
     
     private func unit(for identifier: HKQuantityTypeIdentifier) -> HKUnit {
@@ -254,20 +276,16 @@ final class HealthQueryManager: ObservableObject {
     }
 
     private func resetAllAnchors() {
-        for key in UserDefaults.standard.dictionaryRepresentation().keys {
-            if key.hasPrefix("anchor_") {
-                UserDefaults.standard.removeObject(forKey: key)
-            }
+        for key in anchorKeys() {
+            UserDefaults.standard.removeObject(forKey: key)
         }
         UserDefaults.standard.set(0.0, forKey: "lastSyncTimestamp")
         setSyncedRecords(0)
     }
     
     private func wipeLocalAnchorsOnly() {
-        for key in UserDefaults.standard.dictionaryRepresentation().keys {
-            if key.hasPrefix("anchor_") {
-                UserDefaults.standard.removeObject(forKey: key)
-            }
+        for key in anchorKeys() {
+            UserDefaults.standard.removeObject(forKey: key)
         }
         UserDefaults.standard.synchronize()
     }
@@ -374,9 +392,7 @@ final class HealthQueryManager: ObservableObject {
     /// Consequence: a server restored from an older backup will not pull the archive back
     /// by itself. "Reset sync state" is the deliberate path for that.
     private func reconcileAnchorState(syncEngine: SyncEngine, serverURL: URL, apiKey: String, deviceId: String) async {
-        let localAnchorKeys = Set(
-            UserDefaults.standard.dictionaryRepresentation().keys.filter { $0.hasPrefix("anchor_") }
-        )
+        let localAnchorKeys = Set(anchorKeys())
 
         do {
             guard let checkpointData = try await syncEngine.fetchServerCheckpoint(
@@ -401,7 +417,7 @@ final class HealthQueryManager: ObservableObject {
                 DataDonorLogger.shared.log("No local anchors; seeding them from the server.", level: .info)
                 for (dataType, base64Str) in checkpointData.checkpoints {
                     if let data = Data(base64Encoded: base64Str) {
-                        UserDefaults.standard.set(data, forKey: "anchor_\(dataType)")
+                        storeAnchorData(data, for: dataType)
                     }
                 }
                 return
@@ -410,7 +426,7 @@ final class HealthQueryManager: ObservableObject {
             var seeded = 0
             for (dataType, base64Str) in checkpointData.checkpoints where !localAnchorKeys.contains("anchor_\(dataType)") {
                 if let data = Data(base64Encoded: base64Str) {
-                    UserDefaults.standard.set(data, forKey: "anchor_\(dataType)")
+                    storeAnchorData(data, for: dataType)
                     seeded += 1
                 }
             }
@@ -428,9 +444,9 @@ final class HealthQueryManager: ObservableObject {
     /// the checkpoint timestamp and writes no rows.
     private func sendHeartbeat(syncEngine: SyncEngine, serverURL: URL, apiKey: String, deviceId: String) async {
         var anchors: [String: String] = [:]
-        for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("anchor_") {
+        for key in anchorKeys() {
             if let data = UserDefaults.standard.data(forKey: key) {
-                anchors[String(key.dropFirst("anchor_".count))] = data.base64EncodedString()
+                anchors[String(key.dropFirst(Self.anchorPrefix.count))] = data.base64EncodedString()
             }
         }
         guard !anchors.isEmpty else { return }
