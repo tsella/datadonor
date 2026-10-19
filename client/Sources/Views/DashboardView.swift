@@ -3,7 +3,7 @@ import Charts
 import UIKit
 
 struct SyncDataPoint: Identifiable, Equatable {
-    let id = UUID()
+    var id: String { "\(type)-\(Int(date.timeIntervalSince1970))" }
     let date: Date
     let type: String
     let count: Int
@@ -24,12 +24,30 @@ struct DashboardView: View {
     @EnvironmentObject var healthQueryManager: HealthQueryManager
     @EnvironmentObject var serverDiscoveryManager: ServerDiscoveryManager
     @EnvironmentObject var syncEngine: SyncEngine
-    @AppStorage("apiKey") private var apiKey = ""
     @AppStorage("customServerURL") private var customServerURL = ""
     
-    @State private var syncData: [SyncDataPoint] = []
+    @State private var syncData: [SyncDataPoint]
     @State private var fetchTask: Task<Void, Never>?
     @State private var lastRefreshCount: Int = 0
+
+    private static let cacheKey = "dashboard_cache_months"
+
+    private static let statDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        return formatter
+    }()
+
+    init() {
+        if let cachedData = UserDefaults.standard.data(forKey: Self.cacheKey),
+           let response = try? JSONDecoder().decode(ServerStatsResponse.self, from: cachedData) {
+            _syncData = State(initialValue: Self.buildPoints(from: response.stats))
+        } else {
+            _syncData = State(initialValue: [])
+        }
+    }
     
     // Earthy pastel palette matching mockup
     let chartColors: [String: Color] = [
@@ -88,8 +106,8 @@ struct DashboardView: View {
                 }
             }
             .chartXAxis {
-                AxisMarks(values: .stride(by: .year)) { value in
-                    AxisValueLabel(format: .dateTime.year())
+                AxisMarks(values: .stride(by: .year)) { _ in
+                    AxisValueLabel(format: .dateTime.year(), anchor: .top)
                         .foregroundStyle(Color.secondary)
                         .font(.caption)
                 }
@@ -97,7 +115,6 @@ struct DashboardView: View {
             .chartYAxis(.hidden)
             .chartLegend(.hidden)
             .frame(height: 250)
-            .animation(.spring(response: 0.6, dampingFraction: 0.8), value: syncData)
             
             // Legend at the bottom
             HStack(spacing: 16) {
@@ -118,19 +135,17 @@ struct DashboardView: View {
         .background(Color(uiColor: .secondarySystemGroupedBackground))
         .cornerRadius(20)
         .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
-        .onAppear {
+        .task {
             lastRefreshCount = healthQueryManager.totalRecordsSynced
-            refreshData()
+            await fetchDashboardStats()
         }
         .onChange(of: healthQueryManager.totalRecordsSynced) { newTotal in
-            if healthQueryManager.isSyncing {
-                if newTotal < lastRefreshCount {
-                    lastRefreshCount = newTotal
-                }
-                if newTotal - lastRefreshCount >= 5000 {
-                    lastRefreshCount = newTotal
-                    refreshData()
-                }
+            guard healthQueryManager.isSyncing else { return }
+            if newTotal < lastRefreshCount {
+                lastRefreshCount = newTotal
+            } else if newTotal - lastRefreshCount >= 5000 {
+                lastRefreshCount = newTotal
+                refreshData()
             }
         }
         .onChange(of: healthQueryManager.isSyncing) { isSyncing in
@@ -158,26 +173,19 @@ struct DashboardView: View {
     
     private func refreshData() {
         fetchTask?.cancel()
-        fetchTask = Task {
+        fetchTask = Task { @MainActor in
+            await Task.yield()
             await fetchDashboardStats()
         }
     }
     
+    @MainActor
     private func fetchDashboardStats() async {
-        let cacheKey = "dashboard_cache_months"
-        
-        if let cachedData = UserDefaults.standard.data(forKey: cacheKey),
-           let response = try? JSONDecoder().decode(ServerStatsResponse.self, from: cachedData) {
-            await MainActor.run {
-                updateChartData(from: response.stats)
-            }
-        }
-        
-        // Only ever talk to an approved server — this used to use the pre-approval
-        // `resolvedURL`, which sent the API key to any host that answered mDNS.
-        guard let serverURL = ServerResolver.resolve(
-            override: customServerURL,
-            discovered: serverDiscoveryManager.activeServerURL) else { return }
+        let apiKey = ServerResolver.loadApiKey()
+        guard !apiKey.isEmpty,
+              let serverURL = ServerResolver.resolve(
+                  override: customServerURL,
+                  discovered: serverDiscoveryManager.activeServerURL) else { return }
         let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? ""
         
         do {
@@ -187,31 +195,41 @@ struct DashboardView: View {
                 timeScale: "months",
                 deviceId: deviceId
             )
+            guard !Task.isCancelled else { return }
             
             if let decoded = try? JSONDecoder().decode(ServerStatsResponse.self, from: data) {
-                UserDefaults.standard.set(data, forKey: cacheKey)
-                await MainActor.run {
-                    updateChartData(from: decoded.stats)
-                }
+                UserDefaults.standard.set(data, forKey: Self.cacheKey)
+                updateChartData(from: decoded.stats, animated: true)
             }
         } catch {
-            print("Dashboard fetch failed: \(error)")
+            if !(error is CancellationError) {
+                print("Dashboard fetch failed: \(error)")
+            }
         }
     }
-    
-    private func updateChartData(from serverStats: [ServerStat]) {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        
+
+    private static func buildPoints(from serverStats: [ServerStat]) -> [SyncDataPoint] {
+        let formatter = Self.statDateFormatter
         var newPoints: [SyncDataPoint] = []
+        newPoints.reserveCapacity(serverStats.count)
         for stat in serverStats {
             if let date = formatter.date(from: stat.date) {
                 newPoints.append(SyncDataPoint(date: date, type: stat.type, count: stat.count))
             }
         }
+        return newPoints
+    }
+    
+    @MainActor
+    private func updateChartData(from serverStats: [ServerStat], animated: Bool) {
+        let newPoints = Self.buildPoints(from: serverStats)
+        guard newPoints != self.syncData else { return }
         
-        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+        if animated && UIApplication.shared.applicationState == .active {
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+                self.syncData = newPoints
+            }
+        } else {
             self.syncData = newPoints
         }
     }

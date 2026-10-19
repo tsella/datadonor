@@ -1,11 +1,11 @@
 import SwiftUI
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject var healthStoreManager: HealthStoreManager
     @EnvironmentObject var serverDiscoveryManager: ServerDiscoveryManager
     @EnvironmentObject var healthQueryManager: HealthQueryManager
     @EnvironmentObject var syncEngine: SyncEngine
-    @AppStorage("apiKey") private var apiKey = ""
     @AppStorage("customServerURL") private var customServerURL = ""
     
     
@@ -153,13 +153,14 @@ struct ContentView: View {
                                 .padding(.bottom, 20)
                             } else {
                                 Button(action: {
+                                    let currentKey = ServerResolver.loadApiKey()
                                     Task {
                                         await healthQueryManager.performSync(
                                             syncEngine: syncEngine,
                                             serverURL: ServerResolver.resolve(
                                                 override: customServerURL,
                                                 discovered: serverDiscoveryManager.activeServerURL),
-                                            apiKey: apiKey
+                                            apiKey: currentKey
                                         )
                                     }
                                 }) {
@@ -189,19 +190,35 @@ struct ContentView: View {
             .onAppear {
                 serverDiscoveryManager.startDiscovery()
             }
+            .onChange(of: scenePhase) { newPhase in
+                switch newPhase {
+                case .active:
+                    serverDiscoveryManager.startDiscovery()
+                case .background:
+                    serverDiscoveryManager.stopDiscovery()
+                default:
+                    break
+                }
+            }
             .onChange(of: serverDiscoveryManager.activeServerURL) { newURL in
+                let currentKey = ServerResolver.loadApiKey()
                 guard newURL != nil, !healthQueryManager.isSyncing, healthStoreManager.isAuthorized,
-                      !apiKey.isEmpty else { return }
+                      !currentKey.isEmpty else { return }
                 Task {
                     await healthQueryManager.performSync(
                         syncEngine: syncEngine,
                         serverURL: ServerResolver.resolve(override: customServerURL, discovered: newURL),
-                        apiKey: apiKey
+                        apiKey: currentKey
                     )
                 }
             }
             .onChange(of: healthQueryManager.isSyncing) { isSyncing in
-                UIApplication.shared.isIdleTimerDisabled = isSyncing
+                // Defer out of SwiftUI's CoreAnimation commit handler phase so UIKit's
+                // idle-timer transaction doesn't trigger CA::Transaction::add_commit_handler errors.
+                DispatchQueue.main.async {
+                    UIApplication.shared.isIdleTimerDisabled =
+                        isSyncing && UIApplication.shared.applicationState == .active
+                }
             }
             // Presentation is derived from the model rather than driven by transitions:
             // whenever a server is pending approval the alert is shown, so re-discovering

@@ -1,7 +1,26 @@
 import SwiftUI
 import AVFoundation
 
-struct QRScannerView: UIViewControllerRepresentable {
+struct QRScannerView: View {
+    @Environment(\.dismiss) private var dismiss
+    var onResult: (String) -> Void
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            QRScannerControllerRepresentable(onResult: onResult)
+                .ignoresSafeArea()
+
+            Button(action: { dismiss() }) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 30))
+                    .foregroundColor(.white.opacity(0.85))
+                    .padding(20)
+            }
+        }
+    }
+}
+
+private struct QRScannerControllerRepresentable: UIViewControllerRepresentable {
     var onResult: (String) -> Void
     
     func makeUIViewController(context: Context) -> ScannerViewController {
@@ -21,19 +40,47 @@ class ScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDel
     
     override func viewDidLoad() {
         super.viewDidLoad()
-        
         view.backgroundColor = UIColor.black
+        checkPermissionAndConfigure()
+    }
+
+    private func checkPermissionAndConfigure() {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            configureSession()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                DispatchQueue.main.async {
+                    if granted {
+                        self?.configureSession()
+                    } else {
+                        self?.showMessage("Camera access is required to scan your API Key QR code. Enable camera access in Settings.")
+                    }
+                }
+            }
+        case .denied, .restricted:
+            showMessage("Camera access is denied. Enable camera access for DataDonor in iOS Settings.")
+        @unknown default:
+            showMessage("Camera is unavailable.")
+        }
+    }
+
+    private func configureSession() {
         let session = AVCaptureSession()
 
         guard let videoCaptureDevice = AVCaptureDevice.default(for: .video),
               let videoInput = try? AVCaptureDeviceInput(device: videoCaptureDevice),
               session.canAddInput(videoInput) else {
+            showMessage("No camera available on this device.")
             return
         }
         session.addInput(videoInput)
 
         let metadataOutput = AVCaptureMetadataOutput()
-        guard session.canAddOutput(metadataOutput) else { return }
+        guard session.canAddOutput(metadataOutput) else {
+            showMessage("Could not configure QR code scanner.")
+            return
+        }
         session.addOutput(metadataOutput)
         metadataOutput.setMetadataObjectsDelegate(self, queue: DispatchQueue.main)
         metadataOutput.metadataObjectTypes = [.qr]
@@ -41,12 +88,28 @@ class ScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDel
         let layer = AVCaptureVideoPreviewLayer(session: session)
         layer.frame = view.layer.bounds
         layer.videoGravity = .resizeAspectFill
-        view.layer.addSublayer(layer)
+        view.layer.insertSublayer(layer, at: 0)
 
         captureSession = session
         previewLayer = layer
 
         startSession()
+    }
+
+    private func showMessage(_ text: String) {
+        let label = UILabel()
+        label.text = text
+        label.textColor = .white
+        label.textAlignment = .center
+        label.numberOfLines = 0
+        label.font = .preferredFont(forTextStyle: .body)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 32),
+            label.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -32),
+            label.centerYAnchor.constraint(equalTo: view.centerYAnchor)
+        ])
     }
 
     /// startRunning()/stopRunning() block, so they must stay off the main thread.
