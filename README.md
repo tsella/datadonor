@@ -25,6 +25,48 @@ To securely link your iOS client to your backend server, DataDonor uses an API K
 3. Your server will read the `API_KEY` you defined in `server/config.json` and print a large QR code directly in your terminal.
 4. On the iOS DataDonor app, tap the QR code icon next to the API Key text field and point your camera at the terminal screen to instantly configure it!
 
+## Repository layout
+
+```
+client/              SwiftUI app: HealthKit extraction, background sync, pinning
+server/              Fastify HTTPS ingest API and SQLite storage
+dashboard/           Read-only web dashboard over the archive and the meal log
+ecosystem.config.js  PM2 process file for both Node services
+```
+
+The dashboard is a consumer, never a writer: it opens both databases with
+`OPEN_READONLY` and a write attempt throws instead of landing.
+
+## Running
+
+```
+cd server && npm install        # then create config.json from config.json.example
+cd dashboard && npm install
+pm2 start ecosystem.config.js   # starts the ingest server and the dashboard
+```
+
+`server/config.json` must define `security.api_key`; the server refuses to start
+while the example value is in place. Relative paths in that file resolve against
+`server/`. Two environment variables override the defaults, mostly for tests:
+`DATADONOR_CONFIG` (config file path) and `DATADONOR_LOG_DIR` (log directory).
+
+Some npm configurations block install scripts. If `require('sqlite3')` fails with
+a missing binding, run `npm install-scripts approve sqlite3` or
+`npm rebuild sqlite3 --foreground-scripts` in that directory.
+
+## Tests
+
+```
+cd server && npm test                  # auth, ingest idempotency, gzip limits, buckets
+cd dashboard && npm test               # unit tests against a throwaway database
+cd dashboard && npm run test:parity    # whole days compared with the Python meal scripts
+```
+
+The two `npm test` suites are self-contained and run in CI. The parity run reads
+the live archive and the meal scripts on this machine, so it is a local check,
+not a CI job. It reports a hard failure when a dashboard day disagrees with the
+scripts that write the the daily report reports.
+
 ## Server Specification
 This app requires a backend server to receive the data. See the `server_specification.md` document for the full JSON payload specifications, checkpoint syncing mechanics, and endpoint requirements.
 
@@ -56,24 +98,4 @@ DataDonor contributors (<noreply@example.com>)
 [https://github.com/example/datadonor](https://github.com/example/datadonor)
 
 ## License
-MIT License
-
-Copyright (c) 2026 DataDonor contributors
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+MIT. See [LICENSE](LICENSE).

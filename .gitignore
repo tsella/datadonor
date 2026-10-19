@@ -6,6 +6,10 @@ project.xcworkspace/
 server/node_modules/
 server/logs/
 client/build/
+dashboard/node_modules/
+__pycache__/
+*.pyc
+daily_metrics_overlay.png
 server/config.json
 server/data/
 !server/data/.gitkeep
