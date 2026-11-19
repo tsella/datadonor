@@ -12,16 +12,20 @@ struct HealthVitalsSnapshot: Equatable, Sendable, Codable {
     let heartRate: HeartRate24hSummary
     let sleep: Sleep24hSummary
     let readiness: ReadinessSummary
+    let energy: Energy7dSummary
 
-    /// Builds all three card summaries from one deduplicated set of HealthKit samples so
-    /// Heart Rate, Sleep, and Readiness share identical RHR, HRV, and sleep figures without
-    /// redundant HealthKit queries or MainActor work.
+    /// Builds all vitals card summaries from one deduplicated set of HealthKit samples so
+    /// Heart Rate, Sleep, Readiness, and Energy share identical figures without redundant
+    /// HealthKit queries or MainActor work.
     static func build(
         heartRate24h: [HeartRateSamplePoint],
+        workouts36h: [HeartRateWorkoutWindow] = [],
         rhr14d: [TimedQuantitySample],
         hrv14d: [TimedQuantitySample],
         sleep36h: [RawSleepSample],
         wristTemp14d: [TimedQuantitySample],
+        dailyBasal7d: [Date: Double] = [:],
+        dailyActive7d: [Date: Double] = [:],
         windowEnd: Date
     ) -> HealthVitalsSnapshot {
         let start24h = windowEnd.addingTimeInterval(-24 * 60 * 60)
@@ -43,16 +47,18 @@ struct HealthVitalsSnapshot: Equatable, Sendable, Codable {
         let tempPrior = wristTemp14d.filter { $0.date < start24h }.map(\.value)
         let tempBaseline = mean(tempPrior.count >= 3 ? tempPrior : wristTemp14d.map(\.value))
 
-        let heartRateSummary = HeartRate24hSummary.build(
-            samples: heartRate24h,
-            restingHeartRateBPM: rhrLatest,
-            hrvSamples24h: hrvRecent24,
-            fallbackHRV: hrvFallback48,
+        let sleepSummary = Sleep24hSummary.build(
+            samples: sleep36h,
             windowEnd: windowEnd
         )
 
-        let sleepSummary = Sleep24hSummary.build(
-            samples: sleep36h,
+        let heartRateSummary = HeartRate24hSummary.build(
+            samples: heartRate24h,
+            workouts: workouts36h,
+            sleepWindows: HeartRateSleepWindow.windows(from: sleepSummary.segments),
+            restingHeartRateBPM: rhrLatest,
+            hrvSamples24h: hrvRecent24,
+            fallbackHRV: hrvFallback48,
             windowEnd: windowEnd
         )
 
@@ -68,10 +74,17 @@ struct HealthVitalsSnapshot: Equatable, Sendable, Codable {
             wristTempBaseline14dC: tempBaseline
         )
 
+        let energySummary = Energy7dSummary.build(
+            dailyBasal: dailyBasal7d,
+            dailyActive: dailyActive7d,
+            now: windowEnd
+        )
+
         return HealthVitalsSnapshot(
             heartRate: heartRateSummary,
             sleep: sleepSummary,
-            readiness: readinessSummary
+            readiness: readinessSummary,
+            energy: energySummary
         )
     }
 
@@ -86,8 +99,10 @@ struct HealthVitalsSnapshot: Equatable, Sendable, Codable {
 /// Uses `NSFileProtectionComplete` (matching HealthKit's own device-lock encryption) and
 /// expires snapshots older than 48 hours so cold launches never flash stale multi-day charts.
 struct VitalsSnapshotCache: Sendable {
+    private static let writeQueue = DispatchQueue(label: "la.tsel.datadonor.vitalscache", qos: .utility)
+
     private struct Envelope: Codable {
-        static let currentSchemaVersion = 1
+        static let currentSchemaVersion = 6
         let schemaVersion: Int
         let cachedAt: Date
         let snapshot: HealthVitalsSnapshot
@@ -126,6 +141,14 @@ struct VitalsSnapshotCache: Sendable {
         guard let data = try? JSONEncoder().encode(envelope) else { return }
         try? data.write(to: fileURL, options: [.atomic, .completeFileProtection])
     }
+
+    /// Serializes background disk writes on one utility queue so rapid refreshes cannot
+    /// overwrite a newer snapshot with an older one out of order.
+    func saveAsync(_ snapshot: HealthVitalsSnapshot, now: Date = Date()) {
+        Self.writeQueue.async {
+            self.save(snapshot, now: now)
+        }
+    }
 }
 
 /// Shared loader for all on-device HealthKit vitals cards (Heart Rate, Sleep, Readiness).
@@ -138,18 +161,27 @@ final class HealthVitalsStore: ObservableObject {
     @Published private(set) var heartRate: HeartRate24hSummary?
     @Published private(set) var sleep: Sleep24hSummary?
     @Published private(set) var readiness: ReadinessSummary?
+    @Published private(set) var energy: Energy7dSummary?
     @Published private(set) var isLoading = false
 
     private let cache: VitalsSnapshotCache
+    private let fetcher: @Sendable (HKHealthStore) async throws -> HealthVitalsSnapshot
     private var fetchTask: Task<Void, Never>?
     private var fetchGuard = FetchGenerationGuard()
 
-    init(cache: VitalsSnapshotCache = VitalsSnapshotCache()) {
+    init(
+        cache: VitalsSnapshotCache = VitalsSnapshotCache(),
+        fetcher: @escaping @Sendable (HKHealthStore) async throws -> HealthVitalsSnapshot = { store in
+            try await HealthVitalsStore.fetchAndCompute(healthStore: store)
+        }
+    ) {
         self.cache = cache
+        self.fetcher = fetcher
         if let cached = cache.load() {
             self.heartRate = cached.heartRate
             self.sleep = cached.sleep
             self.readiness = cached.readiness
+            self.energy = cached.energy
         }
     }
 
@@ -158,8 +190,9 @@ final class HealthVitalsStore: ObservableObject {
 
         fetchTask?.cancel()
         let generation = fetchGuard.beginNext()
-        let hadData = (heartRate != nil || sleep != nil || readiness != nil)
+        let hadData = (heartRate != nil || sleep != nil || readiness != nil || energy != nil)
         let cache = self.cache
+        let fetcher = self.fetcher
 
         fetchTask = Task { @MainActor in
             if !hadData {
@@ -167,14 +200,19 @@ final class HealthVitalsStore: ObservableObject {
             }
             defer { isLoading = false }
 
-            let snapshot = await Self.fetchAndCompute(healthStore: healthStore)
-            guard !Task.isCancelled, fetchGuard.isCurrent(generation) else { return }
+            do {
+                let snapshot = try await fetcher(healthStore)
+                guard !Task.isCancelled, fetchGuard.isCurrent(generation) else { return }
 
-            Task.detached(priority: .utility) {
-                cache.save(snapshot)
+                cache.saveAsync(snapshot)
+                apply(snapshot, animated: UIApplication.shared.applicationState == .active)
+            } catch {
+                // Preserve any existing cached snapshot rather than wiping the UI with empty
+                // data if HealthKit is momentarily locked or returns a transient read error.
+                DataDonorLogger.shared.log(
+                    "Vitals refresh failed (preserving cached state): \(error.localizedDescription)",
+                    level: .debug)
             }
-
-            apply(snapshot, animated: UIApplication.shared.applicationState == .active)
         }
     }
 
@@ -182,12 +220,14 @@ final class HealthVitalsStore: ObservableObject {
         let heartChanged = (heartRate != snapshot.heartRate)
         let sleepChanged = (sleep != snapshot.sleep)
         let readinessChanged = (readiness != snapshot.readiness)
-        guard heartChanged || sleepChanged || readinessChanged else { return }
+        let energyChanged = (energy != snapshot.energy)
+        guard heartChanged || sleepChanged || readinessChanged || energyChanged else { return }
 
         let updates = {
             if heartChanged { self.heartRate = snapshot.heartRate }
             if sleepChanged { self.sleep = snapshot.sleep }
             if readinessChanged { self.readiness = snapshot.readiness }
+            if energyChanged { self.energy = snapshot.energy }
         }
 
         if animated {
@@ -206,8 +246,21 @@ final class HealthVitalsStore: ObservableObject {
 
     // MARK: - Deduplicated HealthKit Queries
 
-    private static func fetchAndCompute(healthStore: HKHealthStore) async -> HealthVitalsSnapshot {
+    private static func isDatabaseInaccessible(_ error: Error) -> Bool {
+        if let hkError = error as? HKError, hkError.code == .errorDatabaseInaccessible {
+            return true
+        }
+        let nsError = error as NSError
+        return nsError.domain == HKErrorDomain &&
+            nsError.code == HKError.Code.errorDatabaseInaccessible.rawValue
+    }
+
+    private static func fetchAndCompute(healthStore: HKHealthStore) async throws -> HealthVitalsSnapshot {
         let now = Date()
+        let calendar = Calendar.current
+        let todayStart = calendar.startOfDay(for: now)
+        let start7d = calendar.date(byAdding: .day, value: -6, to: todayStart)
+            ?? todayStart.addingTimeInterval(-6 * 86_400)
         let start24h = now.addingTimeInterval(-24 * 60 * 60)
         let start36h = now.addingTimeInterval(-36 * 60 * 60)
         let start14d = now.addingTimeInterval(-14 * 24 * 60 * 60)
@@ -231,24 +284,121 @@ final class HealthVitalsStore: ObservableObject {
         async let sleep36h = querySleepSamples(
             healthStore: healthStore, start: start36h, end: now
         )
+        async let workouts36h = queryWorkouts(
+            healthStore: healthStore, start: start36h, end: now
+        )
         async let temp14d = queryWristTempSamples(
             healthStore: healthStore, start: start14d, end: now, unit: celsiusUnit
         )
+        async let basal7d = queryDailyEnergy(
+            healthStore: healthStore, identifier: .basalEnergyBurned,
+            start: start7d, end: now
+        )
+        async let active7d = queryDailyEnergy(
+            healthStore: healthStore, identifier: .activeEnergyBurned,
+            start: start7d, end: now
+        )
 
-        let (hr, rhr, hrv, sleep, temp) = await (hr24h, rhr14d, hrv14d, sleep36h, temp14d)
+        let (hr, rhr, hrv, sleep, workouts, temp, basal, active) = try await (
+            hr24h, rhr14d, hrv14d, sleep36h, workouts36h, temp14d, basal7d, active7d
+        )
 
         // Run bucketing, interval union-merging, and readiness scoring off the MainActor.
         return await Task.detached(priority: .userInitiated) {
             let hrPoints = hr.map { HeartRateSamplePoint(date: $0.date, bpm: $0.value) }
             return HealthVitalsSnapshot.build(
                 heartRate24h: hrPoints,
+                workouts36h: workouts,
                 rhr14d: rhr,
                 hrv14d: hrv,
                 sleep36h: sleep,
                 wristTemp14d: temp,
+                dailyBasal7d: basal,
+                dailyActive7d: active,
                 windowEnd: now
             )
         }.value
+    }
+
+    private static func queryDailyEnergy(
+        healthStore: HKHealthStore,
+        identifier: HKQuantityTypeIdentifier,
+        start: Date,
+        end: Date
+    ) async throws -> [Date: Double] {
+        guard let type = HKObjectType.quantityType(forIdentifier: identifier) else { return [:] }
+        // Omit `.strictStartDate` so HealthKit proportionally splits basal/active samples that
+        // straddle the leading midnight boundary of the 7-day window.
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: [])
+        let interval = DateComponents(day: 1)
+
+        return try await withCheckedThrowingContinuation { continuation in
+            let query = HKStatisticsCollectionQuery(
+                quantityType: type,
+                quantitySamplePredicate: predicate,
+                options: .cumulativeSum,
+                anchorDate: start,
+                intervalComponents: interval
+            )
+            query.initialResultsHandler = { _, collection, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                var daily: [Date: Double] = [:]
+                collection?.enumerateStatistics(from: start, to: end) { stats, _ in
+                    if let kcal = stats.sumQuantity()?.doubleValue(for: .kilocalorie()), kcal > 0 {
+                        daily[stats.startDate] = kcal
+                    }
+                }
+                continuation.resume(returning: daily)
+            }
+            healthStore.execute(query)
+        }
+    }
+
+    private static func queryWorkouts(
+        healthStore: HKHealthStore,
+        start: Date,
+        end: Date
+    ) async throws -> [HeartRateWorkoutWindow] {
+        let workoutType = HKObjectType.workoutType()
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: [])
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+        let activeEnergyType = HKQuantityType(.activeEnergyBurned)
+
+        return try await withCheckedThrowingContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: workoutType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [sort]
+            ) { _, samples, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                let mapped: [HeartRateWorkoutWindow] = (samples as? [HKWorkout] ?? []).compactMap { workout in
+                    guard workout.endDate > workout.startDate else { return nil }
+                    let descriptor = HeartRateWorkoutWindow.descriptor(for: workout.workoutActivityType)
+                    let durationMinutes = max(1, Int((workout.duration / 60.0).rounded()))
+                    let kcal = workout.statistics(for: activeEnergyType)?
+                        .sumQuantity()?
+                        .doubleValue(for: .kilocalorie())
+                        .rounded()
+                    return HeartRateWorkoutWindow(
+                        start: workout.startDate,
+                        end: workout.endDate,
+                        activityName: descriptor.name,
+                        symbolName: descriptor.symbol,
+                        durationMinutes: durationMinutes,
+                        activeKilocalories: kcal.map(Int.init)
+                    )
+                }
+                continuation.resume(returning: mapped)
+            }
+            healthStore.execute(query)
+        }
     }
 
     private static func queryWristTempSamples(
@@ -256,15 +406,22 @@ final class HealthVitalsStore: ObservableObject {
         start: Date,
         end: Date,
         unit: HKUnit
-    ) async -> [TimedQuantitySample] {
+    ) async throws -> [TimedQuantitySample] {
         if #available(iOS 16.0, *) {
-            return await queryQuantitySamples(
-                healthStore: healthStore,
-                identifier: .appleSleepingWristTemperature,
-                start: start,
-                end: end,
-                unit: unit
-            )
+            do {
+                return try await queryQuantitySamples(
+                    healthStore: healthStore,
+                    identifier: .appleSleepingWristTemperature,
+                    start: start,
+                    end: end,
+                    unit: unit
+                )
+            } catch {
+                // Propagate locked-database errors so we preserve the cache, but treat
+                // unsupported/unavailable wrist temperature hardware as an optional empty channel.
+                if isDatabaseInaccessible(error) { throw error }
+                return []
+            }
         }
         return []
     }
@@ -275,18 +432,22 @@ final class HealthVitalsStore: ObservableObject {
         start: Date,
         end: Date,
         unit: HKUnit
-    ) async -> [TimedQuantitySample] {
+    ) async throws -> [TimedQuantitySample] {
         guard let type = HKObjectType.quantityType(forIdentifier: identifier) else { return [] }
         let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
         let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
 
-        return await withCheckedContinuation { continuation in
+        return try await withCheckedThrowingContinuation { continuation in
             let query = HKSampleQuery(
                 sampleType: type,
                 predicate: predicate,
                 limit: HKObjectQueryNoLimit,
                 sortDescriptors: [sort]
-            ) { _, samples, _ in
+            ) { _, samples, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
                 let mapped: [TimedQuantitySample] = (samples as? [HKQuantitySample] ?? []).compactMap { sample in
                     guard sample.quantity.is(compatibleWith: unit) else { return nil }
                     return TimedQuantitySample(
@@ -304,18 +465,22 @@ final class HealthVitalsStore: ObservableObject {
         healthStore: HKHealthStore,
         start: Date,
         end: Date
-    ) async -> [RawSleepSample] {
+    ) async throws -> [RawSleepSample] {
         guard let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else { return [] }
         let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: [])
         let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
 
-        return await withCheckedContinuation { continuation in
+        return try await withCheckedThrowingContinuation { continuation in
             let query = HKSampleQuery(
                 sampleType: sleepType,
                 predicate: predicate,
                 limit: HKObjectQueryNoLimit,
                 sortDescriptors: [sort]
-            ) { _, samples, _ in
+            ) { _, samples, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
                 let mapped: [RawSleepSample] = (samples as? [HKCategorySample] ?? []).map { sample in
                     let sourceName = sample.sourceRevision.source.name
                     let product = sample.sourceRevision.productType ?? ""

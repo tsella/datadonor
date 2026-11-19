@@ -105,14 +105,6 @@ struct DashboardView: View {
     private static let cacheKey = "dashboard_cache_months"
     private static let categories = ["Heart Rate", "Steps", "Sleep", "Workouts"]
 
-    private static let statDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        return formatter
-    }()
-
     private static let monthLabelFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "MMM yyyy"
@@ -182,10 +174,6 @@ struct DashboardView: View {
         .task {
             lastRefreshCount = healthQueryManager.totalRecordsSynced
             refreshData()
-        }
-        .onDisappear {
-            fetchTask?.cancel()
-            fetchTask = nil
         }
         .onChange(of: healthQueryManager.totalRecordsSynced) { newTotal in
             guard healthQueryManager.isSyncing else { return }

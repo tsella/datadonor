@@ -10,19 +10,17 @@ struct ContentView: View {
     @AppStorage("cardCollapsed_server") private var isServerCardCollapsed = false
 
     @StateObject private var vitalsStore = HealthVitalsStore()
+    @State private var showSplash = true
 
     var body: some View {
-        NavigationStack {
+        ZStack {
+            NavigationStack {
             ZStack {
                 AppTheme.Colors.groupedBackground
                     .ignoresSafeArea()
 
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: AppTheme.Layout.cardStackSpacing) {
-                        headerBar
-                            .padding(.horizontal, AppTheme.Layout.screenHorizontalPadding)
-                            .padding(.top, 10)
-
                         serverConnectionCard
                             .padding(.horizontal, AppTheme.Layout.screenHorizontalPadding)
 
@@ -35,13 +33,22 @@ struct ContentView: View {
                         )
                         .padding(.horizontal, AppTheme.Layout.screenHorizontalPadding)
 
-                        Spacer(minLength: 16)
-
-                        actionButton
+                        if !healthStoreManager.isAuthorized {
+                            primaryActionButton(
+                                title: "Grant Health Access",
+                                systemImage: "heart.fill",
+                                tint: AppTheme.Colors.teal
+                            ) {
+                                healthStoreManager.requestAuthorization()
+                            }
                             .padding(.horizontal, AppTheme.Layout.screenHorizontalPadding)
-                            .padding(.bottom, 20)
+                        }
                     }
-                    .padding(.top, 10)
+                    .padding(.top, 14)
+                    .padding(.bottom, 28)
+                }
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    pinnedHeaderBar
                 }
             }
             .navigationTitle("")
@@ -55,9 +62,6 @@ struct ContentView: View {
             .onAppear {
                 serverDiscoveryManager.startDiscovery()
             }
-            .onDisappear {
-                vitalsStore.cancel()
-            }
             .onChange(of: scenePhase) { newPhase in
                 switch newPhase {
                 case .active:
@@ -68,6 +72,7 @@ struct ContentView: View {
                     )
                 case .background:
                     serverDiscoveryManager.stopDiscovery()
+                    vitalsStore.cancel()
                     BackgroundSyncManager.shared.scheduleAppRefresh()
                     BackgroundSyncManager.shared.scheduleProcessing()
                 default:
@@ -125,36 +130,116 @@ struct ContentView: View {
                     Text("Would you like to connect to this new server?")
                 }
             }
+            }
+
+            if showSplash {
+                SplashScreenView(isReady: !vitalsStore.isLoading) {
+                    showSplash = false
+                }
+                .zIndex(1)
+            }
         }
     }
 
     // MARK: - Subviews
 
-    private var headerBar: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Image("Logo")
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 44, height: 44)
-                .clipShape(RoundedRectangle(cornerRadius: AppTheme.Layout.chipCornerRadius, style: .continuous))
-                .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
+    private var pinnedHeaderBar: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 10) {
+                Image("Logo")
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 40, height: 40)
+                    .clipShape(RoundedRectangle(cornerRadius: AppTheme.Layout.chipCornerRadius, style: .continuous))
+                    .shadow(color: AppTheme.Colors.cardShadow, radius: 4, x: 0, y: 2)
 
-            Text("DataDonor")
-                .font(.system(size: 28, weight: .bold, design: .rounded))
-                .foregroundColor(.primary)
+                Text("DataDonor")
+                    .font(.system(size: 26, weight: .bold, design: .rounded))
+                    .foregroundColor(.primary)
 
-            Spacer()
+                Spacer()
 
-            NavigationLink(destination: SettingsView()) {
-                Image(systemName: "gearshape.fill")
-                    .font(.title3)
-                    .foregroundColor(.secondary)
-                    .padding(12)
-                    .background(AppTheme.Colors.cardSurface)
-                    .clipShape(Circle())
-                    .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
+                syncCircleButton
+
+                NavigationLink(destination: SettingsView()) {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .frame(width: 42, height: 42)
+                        .background(AppTheme.Colors.cardSurface)
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .strokeBorder(AppTheme.Colors.subtleBorder, lineWidth: 0.75)
+                        )
+                        .shadow(color: AppTheme.Colors.cardShadow, radius: 5, x: 0, y: 2)
+                }
+                .accessibilityLabel("Settings")
             }
+            .padding(.horizontal, AppTheme.Layout.screenHorizontalPadding)
+            .padding(.vertical, 10)
+
+            Divider()
+                .opacity(0.4)
         }
+        .background(.bar)
+    }
+
+    private var syncCircleButton: some View {
+        let isAuthorized = healthStoreManager.isAuthorized
+        let isSyncing = healthQueryManager.isSyncing
+        let resolvedURL = ServerResolver.resolve(
+            override: customServerURL,
+            discovered: serverDiscoveryManager.activeServerURL
+        )
+        let isDisabled = isAuthorized && !isSyncing && resolvedURL == nil
+
+        let iconName: String
+        let fillColor: Color
+        let label: String
+        if !isAuthorized {
+            iconName = "heart.fill"
+            fillColor = AppTheme.Colors.teal
+            label = "Grant Health Access"
+        } else if isSyncing {
+            iconName = "stop.fill"
+            fillColor = AppTheme.Colors.destructive
+            label = "Stop Sync"
+        } else {
+            iconName = "arrow.triangle.2.circlepath"
+            fillColor = AppTheme.Colors.teal
+            label = isDisabled ? "Sync unavailable (no server connected)" : "Sync Now"
+        }
+
+        return Button {
+            if !isAuthorized {
+                healthStoreManager.requestAuthorization()
+            } else if isSyncing {
+                healthQueryManager.cancelSync()
+            } else if let serverURL = resolvedURL {
+                let currentKey = ServerResolver.loadApiKey()
+                Task {
+                    await healthQueryManager.performSync(
+                        syncEngine: syncEngine,
+                        serverURL: serverURL,
+                        apiKey: currentKey
+                    )
+                }
+            }
+        } label: {
+            Image(systemName: iconName)
+                .font(.system(size: isSyncing ? 15 : 17, weight: .semibold))
+                .foregroundColor(.white)
+                .frame(width: 42, height: 42)
+                .background(fillColor)
+                .clipShape(Circle())
+                .shadow(color: fillColor.opacity(isDisabled ? 0.12 : 0.32), radius: 6, x: 0, y: 3)
+                .opacity(isDisabled ? 0.45 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .animation(AppTheme.Animations.readoutUpdate, value: isSyncing)
+        .accessibilityLabel(label)
     }
 
     @ViewBuilder
@@ -220,44 +305,6 @@ struct ContentView: View {
         }
     }
 
-    @ViewBuilder
-    private var actionButton: some View {
-        if !healthStoreManager.isAuthorized {
-            primaryActionButton(
-                title: "Grant Health Access",
-                systemImage: "heart.fill",
-                tint: AppTheme.Colors.teal
-            ) {
-                healthStoreManager.requestAuthorization()
-            }
-        } else if healthQueryManager.isSyncing {
-            primaryActionButton(
-                title: "Stop Sync",
-                systemImage: "stop.circle.fill",
-                tint: AppTheme.Colors.destructive
-            ) {
-                healthQueryManager.cancelSync()
-            }
-        } else {
-            primaryActionButton(
-                title: "Sync Now",
-                systemImage: "arrow.triangle.2.circlepath",
-                tint: AppTheme.Colors.teal
-            ) {
-                let currentKey = ServerResolver.loadApiKey()
-                Task {
-                    await healthQueryManager.performSync(
-                        syncEngine: syncEngine,
-                        serverURL: ServerResolver.resolve(
-                            override: customServerURL,
-                            discovered: serverDiscoveryManager.activeServerURL),
-                        apiKey: currentKey
-                    )
-                }
-            }
-        }
-    }
-
     private func primaryActionButton(
         title: String,
         systemImage: String,
@@ -303,6 +350,12 @@ private struct VitalsCardsSection: View {
 
             ReadinessCardView(
                 summary: vitalsStore.readiness,
+                isAuthorized: isAuthorized,
+                isLoading: vitalsStore.isLoading
+            )
+
+            EnergyCardView(
+                summary: vitalsStore.energy,
                 isAuthorized: isAuthorized,
                 isLoading: vitalsStore.isLoading
             )

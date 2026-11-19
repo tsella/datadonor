@@ -94,6 +94,9 @@ struct Sleep24hSummary: Equatable, Sendable, Codable {
     let coreSeconds: TimeInterval
     let deepSeconds: TimeInterval
     let selectedSourceName: String?
+    /// True only when the selected source recorded granular sleep stages (Core/Deep/REM)
+    /// rather than coarse `.asleepUnspecified` intervals.
+    let hasGranularStages: Bool
     /// Precomputed once off-MainActor for smooth rendering.
     let chartDomain: ClosedRange<Date>
     let distributionShares: [SleepStageShare]
@@ -103,7 +106,7 @@ struct Sleep24hSummary: Equatable, Sendable, Codable {
     }
 
     var restorativeShare: Double? {
-        guard totalAsleepSeconds > 0 else { return nil }
+        guard hasGranularStages, totalAsleepSeconds > 0 else { return nil }
         return (remSeconds + deepSeconds) / totalAsleepSeconds
     }
 
@@ -209,6 +212,7 @@ struct Sleep24hSummary: Equatable, Sendable, Codable {
                 coreSeconds: 0,
                 deepSeconds: 0,
                 selectedSourceName: nil,
+                hasGranularStages: false,
                 chartDomain: windowStart...windowEnd,
                 distributionShares: []
             )
@@ -255,6 +259,8 @@ struct Sleep24hSummary: Equatable, Sendable, Codable {
             SleepStageShare(stage: .awake, ratio: awake / totalAll)
         ].filter { $0.ratio > 0.005 }
 
+        let hasGranular = chosen.contains(where: \.isGranular)
+
         return Sleep24hSummary(
             windowStart: windowStart,
             windowEnd: windowEnd,
@@ -267,6 +273,7 @@ struct Sleep24hSummary: Equatable, Sendable, Codable {
             coreSeconds: core,
             deepSeconds: deep,
             selectedSourceName: chosenKey,
+            hasGranularStages: hasGranular,
             chartDomain: domain,
             distributionShares: shares
         )
@@ -336,7 +343,7 @@ struct SleepCardView: View {
                             .monospacedDigit()
                     }
                     Spacer()
-                    Text(selectedSegment == nil ? "Drag to inspect stages" : (selectedSegment?.stage.label ?? ""))
+                    Text(selectedSegment == nil ? "Hold & drag to inspect stages" : (selectedSegment?.stage.label ?? ""))
                         .font(.caption2)
                         .foregroundColor(.secondary.opacity(0.85))
                 }

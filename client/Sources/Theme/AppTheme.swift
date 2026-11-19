@@ -31,6 +31,27 @@ enum AppTheme {
         static let destructive = Color.red.opacity(0.9)
         static let warning = Color.orange
 
+        // Splash screen palette
+        static let splashBackgroundTop = Color(red: 16/255.0, green: 23/255.0, blue: 38/255.0)
+        static let splashBackgroundBottom = Color(red: 11/255.0, green: 16/255.0, blue: 27/255.0)
+        static let splashViolet = Color(red: 124/255.0, green: 109/255.0, blue: 214/255.0)
+        static let splashGlassSurface = Color.white.opacity(0.08)
+        static let splashGlassBorder = Color.white.opacity(0.18)
+        static let splashTitlePrimary = Color.white
+        static let splashTitleSecondary = Color.white.opacity(0.68)
+        static let splashBackdropGradient = LinearGradient(
+            colors: [splashBackgroundTop, splashBackgroundBottom],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        static func splashRingGradient(angle: Angle) -> AngularGradient {
+            AngularGradient(
+                colors: [splashViolet, teal, emerald, coral, ochre, splashViolet],
+                center: .center,
+                angle: angle
+            )
+        }
+
         // Prebuilt gradients reused across chart marks to avoid repeated allocations in ForEach.
         static let heartLineGradient = LinearGradient(
             colors: [coral, coralDeep],
@@ -49,6 +70,26 @@ enum AppTheme {
         )
         static let heartRangeHighlightedGradient = LinearGradient(
             colors: [coral.opacity(0.65), coral.opacity(0.35)],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        static let workoutBandGradient = LinearGradient(
+            colors: [ochre.opacity(0.24), ochre.opacity(0.06)],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        static let workoutBandHighlightedGradient = LinearGradient(
+            colors: [ochre.opacity(0.38), ochre.opacity(0.12)],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        static let sleepBandGradient = LinearGradient(
+            colors: [sleepDeep.opacity(0.18), sleepCore.opacity(0.05)],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        static let sleepBandHighlightedGradient = LinearGradient(
+            colors: [sleepDeep.opacity(0.32), sleepCore.opacity(0.11)],
             startPoint: .top,
             endPoint: .bottom
         )
@@ -189,11 +230,79 @@ struct CollapsibleCard<HeaderLeading: View, HeaderTrailing: View, BodyContent: V
     }
 }
 
-/// Reusable iOS 16+ chart drag-to-scrub gesture overlay that translates touch X into a Date.
+/// Reusable compact vitals KPI tile (used in Heart Rate for RHR/HRV and Energy for Basal/Active).
+struct MetricIndicatorTile: View {
+    let title: String
+    let icon: String
+    let tint: Color
+    let value: String
+    let unit: String
+    let caption: String
+
+    var body: some View {
+        HStack(spacing: 11) {
+            ZStack {
+                RoundedRectangle(cornerRadius: AppTheme.Layout.chipCornerRadius, style: .continuous)
+                    .fill(tint.opacity(0.15))
+                    .frame(width: 34, height: 34)
+                Image(systemName: icon)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(tint)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text(title)
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.primary.opacity(0.8))
+                    if !caption.isEmpty {
+                        Text("· \(caption)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+
+                HStack(alignment: .firstTextBaseline, spacing: 3) {
+                    Text(value)
+                        .font(.system(.title3, design: .rounded).weight(.bold))
+                        .foregroundColor(.primary)
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    if !unit.isEmpty {
+                        Text(unit)
+                            .font(.caption2.weight(.medium))
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: AppTheme.Layout.insetCornerRadius, style: .continuous)
+                .fill(AppTheme.Colors.insetSurface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: AppTheme.Layout.insetCornerRadius, style: .continuous)
+                .strokeBorder(tint.opacity(0.16), lineWidth: 1)
+        )
+    }
+}
+
+/// Reusable iOS 16+ chart press-and-drag scrub overlay that translates touch X into a Date
+/// without hijacking vertical `ScrollView` swipes.
 struct DateChartScrubOverlay: View {
     let proxy: ChartProxy
     let onScrubDate: (Date) -> Void
     let onEnd: () -> Void
+
+    @GestureState private var isScrubbing = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -201,10 +310,20 @@ struct DateChartScrubOverlay: View {
                 .fill(.clear)
                 .contentShape(Rectangle())
                 .gesture(
-                    DragGesture(minimumDistance: 0)
+                    LongPressGesture(minimumDuration: 0.15)
+                        .sequenced(before: DragGesture(minimumDistance: 0))
+                        .updating($isScrubbing) { value, state, _ in
+                            if case .second(true, _) = value {
+                                state = true
+                            }
+                        }
                         .onChanged { value in
+                            guard case .second(true, let drag) = value,
+                                  let location = drag?.location else {
+                                return
+                            }
                             let origin = geometry[proxy.plotAreaFrame].origin
-                            let locationX = value.location.x - origin.x
+                            let locationX = location.x - origin.x
                             guard locationX >= 0, locationX <= proxy.plotAreaSize.width,
                                   let date = proxy.value(atX: locationX, as: Date.self) else {
                                 return
@@ -215,6 +334,11 @@ struct DateChartScrubOverlay: View {
                             onEnd()
                         }
                 )
+        }
+        .onChange(of: isScrubbing) { active in
+            if !active {
+                onEnd()
+            }
         }
     }
 }

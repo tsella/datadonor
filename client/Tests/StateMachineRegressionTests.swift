@@ -827,6 +827,8 @@ final class StateMachineRegressionTests: XCTestCase {
         // Heart Rate card and Readiness card agree on exact RHR, HRV, and Sleep values.
         XCTAssertEqual(snapshot.heartRate.restingHeartRateBPM, 51)
         XCTAssertEqual(snapshot.heartRate.hrvMilliseconds, 66)
+        XCTAssertEqual(snapshot.heartRate.sleepWindows.count, 1)
+        XCTAssertEqual(snapshot.heartRate.sleepWindows[0].asleepSeconds, 8 * 3600, accuracy: 1.0)
         XCTAssertEqual(snapshot.sleep.totalAsleepHours, 8.0, accuracy: 0.001)
         XCTAssertEqual(snapshot.readiness.availableFactorCount, 3)
         XCTAssertEqual(snapshot.readiness.tier, .optimal)
@@ -882,5 +884,245 @@ final class StateMachineRegressionTests: XCTestCase {
         store.apply(refreshed, animated: false)
         XCTAssertEqual(store.heartRate, refreshed.heartRate)
         XCTAssertEqual(store.readiness, refreshed.readiness)
+    }
+
+    func testReviewFinding2_NonStagedSleepDoesNotPenalizeReadinessWithZeroRestorativeShare() {
+        let now = Date()
+        let sleepSamples = [
+            RawSleepSample(
+                startDate: now.addingTimeInterval(-9 * 3600),
+                endDate: now.addingTimeInterval(-1 * 3600), // 8 hours asleepUnspecified
+                categoryValue: HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue,
+                sourceKey: "Clock",
+                isWatchSource: false
+            )
+        ]
+
+        let snapshot = HealthVitalsSnapshot.build(
+            heartRate24h: [],
+            rhr14d: [],
+            hrv14d: [],
+            sleep36h: sleepSamples,
+            wristTemp14d: [],
+            windowEnd: now
+        )
+
+        XCTAssertFalse(snapshot.sleep.hasGranularStages)
+        XCTAssertNil(snapshot.sleep.restorativeShare, "Non-staged sleep must not report 0% restorative share")
+        let sleepFactor = snapshot.readiness.factors.first(where: { $0.id == "sleep" })
+        XCTAssertEqual(sleepFactor?.detailText, "Last 24h")
+        XCTAssertEqual(snapshot.readiness.score, 100)
+    }
+
+    @MainActor
+    func testReviewFinding3_VitalsStorePreservesCachedSnapshotOnQueryError() async {
+        let tempCacheURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vitals-err-cache-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tempCacheURL) }
+
+        let now = Date()
+        let cachedSnapshot = HealthVitalsSnapshot.build(
+            heartRate24h: [HeartRateSamplePoint(date: now.addingTimeInterval(-600), bpm: 66)],
+            rhr14d: [TimedQuantitySample(date: now.addingTimeInterval(-3600), value: 52)],
+            hrv14d: [TimedQuantitySample(date: now.addingTimeInterval(-3600), value: 65)],
+            sleep36h: [],
+            wristTemp14d: [],
+            windowEnd: now
+        )
+        let cache = VitalsSnapshotCache(fileURL: tempCacheURL)
+        cache.save(cachedSnapshot, now: now)
+
+        let fetchAttempted = expectation(description: "failing fetch executed")
+        let store = HealthVitalsStore(cache: cache, fetcher: { _ in
+            fetchAttempted.fulfill()
+            throw HKError(.errorDatabaseInaccessible)
+        })
+
+        // Seeded from cache immediately.
+        XCTAssertEqual(store.heartRate, cachedSnapshot.heartRate)
+
+        store.refresh(healthStore: HKHealthStore(), isAuthorized: true)
+        await fulfillment(of: [fetchAttempted], timeout: 2.0)
+        // Give MainActor catch block a turn to finish.
+        await Task.yield()
+
+        // Cached state and disk file remain intact despite locked-database error.
+        XCTAssertEqual(store.heartRate, cachedSnapshot.heartRate)
+        XCTAssertEqual(store.readiness, cachedSnapshot.readiness)
+        XCTAssertEqual(cache.load(), cachedSnapshot)
+    }
+
+    func testHeartRate24hSummaryClipsWorkoutsAndMatchesScrubbedTimestamp() {
+        let now = Date()
+        let runStart = now.addingTimeInterval(-3 * 3600)
+        let runEnd = now.addingTimeInterval(-2 * 3600 - 15 * 60) // 45m run
+        let oldStart = now.addingTimeInterval(-28 * 3600)
+        let oldEnd = now.addingTimeInterval(-27 * 3600) // outside 24h window
+
+        let workouts = [
+            HeartRateWorkoutWindow(
+                start: oldStart,
+                end: oldEnd,
+                activityName: "Walk",
+                symbolName: "figure.walk",
+                durationMinutes: 60,
+                activeKilocalories: 220
+            ),
+            HeartRateWorkoutWindow(
+                start: runStart,
+                end: runEnd,
+                activityName: "Run",
+                symbolName: "figure.run",
+                durationMinutes: 45,
+                activeKilocalories: nil
+            ),
+            HeartRateWorkoutWindow(
+                start: runStart,
+                end: runEnd,
+                activityName: "Run",
+                symbolName: "figure.run",
+                durationMinutes: 45,
+                activeKilocalories: 480
+            )
+        ]
+
+        let summary = HeartRate24hSummary.build(
+            samples: [HeartRateSamplePoint(date: runStart.addingTimeInterval(600), bpm: 158)],
+            workouts: workouts,
+            restingHeartRateBPM: 52,
+            hrvSamples24h: [64],
+            fallbackHRV: nil,
+            windowEnd: now
+        )
+
+        // Identical duplicate workouts from multiple writers collapse to one entry, preferring kcal.
+        XCTAssertEqual(summary.workouts.count, 1)
+        XCTAssertEqual(summary.totalActivitySeconds, 45 * 60, accuracy: 1.0)
+        XCTAssertEqual(summary.workouts[0].activityName, "Run")
+        XCTAssertEqual(summary.workouts[0].activeKilocalories, 480)
+        XCTAssertEqual(summary.workout(at: runStart.addingTimeInterval(600))?.activityName, "Run")
+        XCTAssertNil(summary.workout(at: now.addingTimeInterval(-30 * 60)))
+    }
+
+    func testHeartRate24hSummaryGroupsSleepWindowsAcrossBriefAwakeningsAndSplitsNaps() {
+        let now = Date()
+        // Overnight sleep: 14h..11h ago (core), 15m awake gap, 10h45m..7h ago (deep/REM) -> 1 merged window
+        // Afternoon nap: 3h..2h15m ago (45m core) -> separate 2nd window (> 45m gap from overnight)
+        let overnightStart = now.addingTimeInterval(-14 * 3600)
+        let awakeStart = now.addingTimeInterval(-11 * 3600)
+        let awakeEnd = now.addingTimeInterval(-10 * 3600 - 45 * 60)
+        let overnightEnd = now.addingTimeInterval(-7 * 3600)
+        let napStart = now.addingTimeInterval(-3 * 3600)
+        let napEnd = now.addingTimeInterval(-2 * 3600 - 15 * 60)
+
+        let segments = [
+            SleepSegment(start: overnightStart, end: awakeStart, stage: .core),
+            SleepSegment(start: awakeStart, end: awakeEnd, stage: .awake),
+            SleepSegment(start: awakeEnd, end: overnightEnd, stage: .deep),
+            SleepSegment(start: napStart, end: napEnd, stage: .core)
+        ]
+
+        let windows = HeartRateSleepWindow.windows(from: segments)
+        XCTAssertEqual(windows.count, 2)
+        XCTAssertEqual(windows[0].start, overnightStart)
+        XCTAssertEqual(windows[0].end, overnightEnd)
+        // 3h + 3h45m = 6h45m asleep (excluding the 15m awake gap)
+        XCTAssertEqual(windows[0].asleepSeconds, 6.75 * 3600, accuracy: 1.0)
+        XCTAssertEqual(windows[1].start, napStart)
+        XCTAssertEqual(windows[1].end, napEnd)
+        XCTAssertEqual(windows[1].asleepSeconds, 45 * 60, accuracy: 1.0)
+
+        let summary = HeartRate24hSummary.build(
+            samples: [HeartRateSamplePoint(date: overnightStart.addingTimeInterval(3600), bpm: 54)],
+            sleepWindows: windows,
+            restingHeartRateBPM: 52,
+            hrvSamples24h: [64],
+            fallbackHRV: nil,
+            windowEnd: now
+        )
+
+        XCTAssertEqual(summary.sleepWindows.count, 2)
+        XCTAssertEqual(summary.totalSleepSeconds, 7.5 * 3600, accuracy: 1.0)
+        XCTAssertEqual(summary.sleepWindow(at: overnightStart.addingTimeInterval(3600))?.id, windows[0].id)
+        XCTAssertEqual(summary.sleepWindow(at: napStart.addingTimeInterval(600))?.id, windows[1].id)
+        XCTAssertNil(summary.sleepWindow(at: now.addingTimeInterval(-5 * 3600)))
+    }
+
+    func testEnergy7dSummaryComputesTDEECompletedDayAverageAndNearestDay() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = Date(timeIntervalSince1970: 1_700_500_000) // arbitrary UTC date
+        let todayStart = calendar.startOfDay(for: now)
+        let dayMinus1 = calendar.date(byAdding: .day, value: -1, to: todayStart)!
+        let dayMinus2 = calendar.date(byAdding: .day, value: -2, to: todayStart)!
+        let dayMinus3 = calendar.date(byAdding: .day, value: -3, to: todayStart)!
+
+        // 2 prior completed days + partial today; dayMinus3 deliberately empty (should not drag avg down)
+        let dailyBasal: [Date: Double] = [
+            dayMinus2: 1700,
+            dayMinus1: 1800,
+            todayStart: 900 // partial day
+        ]
+        let dailyActive: [Date: Double] = [
+            dayMinus2: 500, // TDEE 2200
+            dayMinus1: 800, // TDEE 2600
+            todayStart: 300 // TDEE 1200
+        ]
+
+        let summary = Energy7dSummary.build(
+            dailyBasal: dailyBasal,
+            dailyActive: dailyActive,
+            now: now,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(summary.days.count, 7)
+        XCTAssertTrue(summary.hasAnyData)
+        XCTAssertEqual(summary.today?.basalKcal, 900)
+        XCTAssertEqual(summary.today?.activeKcal, 300)
+        XCTAssertEqual(summary.today?.tdeeKcal, 1200)
+        XCTAssertEqual(summary.today?.basalShare ?? 0, 0.75, accuracy: 0.001)
+        XCTAssertEqual(summary.today?.activeShare ?? 0, 0.25, accuracy: 0.001)
+
+        // Average uses only the 2 prior completed days with data (2200 and 2600 -> 2400).
+        XCTAssertEqual(summary.averagedDayCount, 2)
+        XCTAssertEqual(summary.averageTDEE ?? 0, 2400, accuracy: 0.01)
+        XCTAssertEqual(summary.averageBasal ?? 0, 1750, accuracy: 0.01)
+        XCTAssertEqual(summary.averageActive ?? 0, 650, accuracy: 0.01)
+
+        // Nearest-day scrubbing picks the right day bucket by midpoint.
+        XCTAssertEqual(summary.nearestDay(to: dayMinus1.addingTimeInterval(14 * 3600))?.date, dayMinus1)
+        XCTAssertEqual(summary.nearestDay(to: dayMinus3.addingTimeInterval(10 * 3600))?.date, dayMinus3)
+
+        // When only today has data, average falls back cleanly to today and X-axis still spans 7 full days.
+        let todayOnly = Energy7dSummary.build(
+            dailyBasal: [todayStart: 1500],
+            dailyActive: [todayStart: 400],
+            now: now,
+            calendar: calendar
+        )
+        XCTAssertEqual(todayOnly.averagedDayCount, 1)
+        XCTAssertEqual(todayOnly.averageTDEE ?? 0, 1900, accuracy: 0.01)
+        XCTAssertEqual(
+            todayOnly.xAxisDomain.upperBound.timeIntervalSince(todayOnly.xAxisDomain.lowerBound),
+            7 * 86_400,
+            accuracy: 1.0
+        )
+    }
+
+    func testSplashWaveformMathRPeakAlignmentAndLubDubScale() {
+        XCTAssertEqual(SplashWaveformMath.ecgLUT.count, SplashWaveformMath.sampleCount + 1)
+
+        // Flat baseline at edges, strong R-peak dead center (u = 0.50), S-wave dip right after.
+        XCTAssertEqual(SplashWaveformMath.ecgAmplitude(at: 0.0), 0.0, accuracy: 0.001)
+        XCTAssertEqual(SplashWaveformMath.ecgAmplitude(at: 1.0), 0.0, accuracy: 0.001)
+        XCTAssertGreaterThan(SplashWaveformMath.ecgAmplitude(at: 0.50), 0.95)
+        XCTAssertLessThan(SplashWaveformMath.ecgAmplitude(at: 0.535), -0.20)
+
+        // Lub-dub beat peaks around 0.44s and 0.63s and rests at 1.0 outside the beat.
+        XCTAssertEqual(SplashWaveformMath.lubDubScale(at: 0.0), 1.0, accuracy: 0.001)
+        XCTAssertGreaterThan(SplashWaveformMath.lubDubScale(at: 0.44), 1.05)
+        XCTAssertGreaterThan(SplashWaveformMath.lubDubScale(at: 0.63), 1.02)
+        XCTAssertEqual(SplashWaveformMath.lubDubScale(at: 1.3), 1.0, accuracy: 0.001)
     }
 }
