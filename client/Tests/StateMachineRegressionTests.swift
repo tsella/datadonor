@@ -575,4 +575,312 @@ final class StateMachineRegressionTests: XCTestCase {
         XCTAssertNil(ServerResolver.cachedFallbackURL(for: hostURL))
         XCTAssertNil(ServerResolver.approvedHost(forChallengeHost: "192.168.1.77"))
     }
+
+    // MARK: - 24h Heart Rate Summary Bucketing & Indicators
+
+    func testHeartRate24hSummaryBucketsRangesGapsAndIndicators() {
+        let now = Date(timeIntervalSince1970: 1_700_100_000)
+        let samples: [HeartRateSamplePoint] = [
+            // Outside 24h window — must be excluded.
+            HeartRateSamplePoint(date: now.addingTimeInterval(-25 * 3600), bpm: 199),
+            // Two samples inside the same 15-min bucket.
+            HeartRateSamplePoint(date: now.addingTimeInterval(-4 * 3600 + 60), bpm: 60),
+            HeartRateSamplePoint(date: now.addingTimeInterval(-4 * 3600 + 300), bpm: 80),
+            // Next contiguous bucket (within 45-min threshold) -> same segmentId (0).
+            HeartRateSamplePoint(date: now.addingTimeInterval(-3 * 3600 - 1800), bpm: 75),
+            // After a 2-hour gap -> increments segmentId (1).
+            HeartRateSamplePoint(date: now.addingTimeInterval(-30 * 60), bpm: 110),
+        ]
+
+        let summary = HeartRate24hSummary.build(
+            samples: samples,
+            restingHeartRateBPM: 52,
+            hrvSamples24h: [40, 60, 80],
+            fallbackHRV: 35,
+            windowEnd: now
+        )
+
+        XCTAssertEqual(summary.buckets.count, 3)
+        XCTAssertEqual(summary.buckets[0].minBPM, 60)
+        XCTAssertEqual(summary.buckets[0].maxBPM, 80)
+        XCTAssertEqual(summary.buckets[0].avgBPM, 70)
+        XCTAssertEqual(summary.buckets[0].segmentId, 0)
+        XCTAssertEqual(summary.buckets[1].segmentId, 0)
+        XCTAssertEqual(summary.buckets[2].segmentId, 1)
+        XCTAssertEqual(summary.latestBPM, 110)
+        XCTAssertEqual(summary.minBPM, 60)
+        XCTAssertEqual(summary.maxBPM, 110)
+        XCTAssertEqual(summary.restingHeartRateBPM, 52)
+        XCTAssertEqual(summary.hrvMilliseconds, 60)
+        XCTAssertTrue(summary.hrvIs24hAverage)
+        XCTAssertLessThanOrEqual(summary.yAxisDomain.lowerBound, 52)
+        XCTAssertGreaterThanOrEqual(summary.yAxisDomain.upperBound, 110)
+
+        // When 24h HRV is empty, falls back to latest 48h HRV and flags hrvIs24hAverage = false.
+        let fallbackSummary = HeartRate24hSummary.build(
+            samples: [],
+            restingHeartRateBPM: nil,
+            hrvSamples24h: [],
+            fallbackHRV: 48,
+            windowEnd: now
+        )
+        XCTAssertEqual(fallbackSummary.hrvMilliseconds, 48)
+        XCTAssertFalse(fallbackSummary.hrvIs24hAverage)
+    }
+
+    // MARK: - 24h Sleep Deduplication, Union-Merge & Stage Breakdown
+
+    func testSleep24hSummaryDeduplicatesMultiWriterSourcesAndMergesOverlaps() {
+        let now = Date(timeIntervalSince1970: 1_700_200_000)
+        let bed = now.addingTimeInterval(-10 * 3600)
+
+        let samples: [RawSleepSample] = [
+            // Apple Watch granular stages (with an overlapping deep/core boundary)
+            RawSleepSample(
+                startDate: bed,
+                endDate: bed.addingTimeInterval(2 * 3600),
+                categoryValue: HKCategoryValueSleepAnalysis.asleepCore.rawValue,
+                sourceKey: "Tom's Apple Watch",
+                isWatchSource: true
+            ),
+            RawSleepSample(
+                startDate: bed.addingTimeInterval(1.5 * 3600), // 30m overlap with Core above
+                endDate: bed.addingTimeInterval(3.5 * 3600),
+                categoryValue: HKCategoryValueSleepAnalysis.asleepDeep.rawValue,
+                sourceKey: "Tom's Apple Watch",
+                isWatchSource: true
+            ),
+            RawSleepSample(
+                startDate: bed.addingTimeInterval(3.5 * 3600),
+                endDate: bed.addingTimeInterval(4.0 * 3600),
+                categoryValue: HKCategoryValueSleepAnalysis.awake.rawValue,
+                sourceKey: "Tom's Apple Watch",
+                isWatchSource: true
+            ),
+            RawSleepSample(
+                startDate: bed.addingTimeInterval(4.0 * 3600),
+                endDate: bed.addingTimeInterval(6.0 * 3600),
+                categoryValue: HKCategoryValueSleepAnalysis.asleepREM.rawValue,
+                sourceKey: "Tom's Apple Watch",
+                isWatchSource: true
+            ),
+            // Duplicate inBed sample (must be ignored)
+            RawSleepSample(
+                startDate: bed,
+                endDate: bed.addingTimeInterval(6.0 * 3600),
+                categoryValue: HKCategoryValueSleepAnalysis.inBed.rawValue,
+                sourceKey: "Tom's Apple Watch",
+                isWatchSource: true
+            ),
+            // Competing iPhone Clock writer (must NOT double-count sleep!)
+            RawSleepSample(
+                startDate: bed,
+                endDate: bed.addingTimeInterval(7.0 * 3600),
+                categoryValue: HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue,
+                sourceKey: "Clock",
+                isWatchSource: false
+            ),
+        ]
+
+        let summary = Sleep24hSummary.build(samples: samples, windowEnd: now)
+
+        XCTAssertEqual(summary.selectedSourceName, "Tom's Apple Watch")
+        // Total asleep union-merged: [0..3.5h] + [4.0..6.0h] = 5.5h (NOT 6.0h or 12.5h!)
+        XCTAssertEqual(summary.totalAsleepHours, 5.5, accuracy: 0.001)
+        XCTAssertEqual(summary.awakeSeconds, 1800, accuracy: 1)
+        XCTAssertEqual(summary.deepSeconds, 7200, accuracy: 1)
+        XCTAssertEqual(summary.remSeconds, 7200, accuracy: 1)
+        XCTAssertEqual(summary.coreSeconds, 7200, accuracy: 1)
+        XCTAssertEqual(Sleep24hSummary.formatDuration(summary.totalAsleepSeconds), "5h 30m")
+    }
+
+    // MARK: - Readiness Score Baseline Calibration & Weight Normalization
+
+    func testReadinessSummaryScoresOptimalAndStrainedStatesAndNormalizesMissingSensors() {
+        // Strong recovery across all 4 signals -> Optimal (85-100)
+        let optimal = ReadinessSummary.build(
+            hrvToday: 75,
+            hrvBaseline14d: 60,
+            rhrToday: 49,
+            rhrBaseline14d: 52,
+            sleepHours24h: 8.0,
+            restorativeSleepShare: 0.42,
+            wristTempTodayC: 36.5,
+            wristTempBaseline14dC: 36.45
+        )
+        XCTAssertNotNil(optimal.score)
+        XCTAssertEqual(optimal.tier, .optimal)
+        XCTAssertEqual(optimal.availableFactorCount, 4)
+        XCTAssertGreaterThanOrEqual(optimal.score ?? 0, 85)
+
+        // Elevated RHR, low HRV, short sleep, feverish wrist temp -> Take It Easy (<55)
+        let strained = ReadinessSummary.build(
+            hrvToday: 34,
+            hrvBaseline14d: 60,
+            rhrToday: 60,
+            rhrBaseline14d: 52,
+            sleepHours24h: 4.5,
+            restorativeSleepShare: 0.20,
+            wristTempTodayC: 37.5,
+            wristTempBaseline14dC: 36.5
+        )
+        XCTAssertEqual(strained.tier, .recover)
+        XCTAssertLessThan(strained.score ?? 100, 55)
+
+        // Missing wrist temp & HRV still produces a normalized score from RHR + Sleep.
+        let partial = ReadinessSummary.build(
+            hrvToday: nil,
+            hrvBaseline14d: nil,
+            rhrToday: 52,
+            rhrBaseline14d: 52,
+            sleepHours24h: 7.5,
+            restorativeSleepShare: 0.38,
+            wristTempTodayC: nil,
+            wristTempBaseline14dC: nil
+        )
+        XCTAssertEqual(partial.availableFactorCount, 2)
+        XCTAssertNotNil(partial.score)
+        XCTAssertGreaterThanOrEqual(partial.score ?? 0, 80)
+
+        // No signals -> nil score
+        let empty = ReadinessSummary.build(
+            hrvToday: nil,
+            hrvBaseline14d: nil,
+            rhrToday: nil,
+            rhrBaseline14d: nil,
+            sleepHours24h: nil,
+            restorativeSleepShare: nil,
+            wristTempTodayC: nil,
+            wristTempBaseline14dC: nil
+        )
+        XCTAssertNil(empty.score)
+        XCTAssertTrue(empty.factors.isEmpty)
+    }
+
+    // MARK: - SyncHistoryIndex & Unified HealthVitalsSnapshot
+
+    func testSyncHistoryIndexPrecomputesTotalsCategoriesAndBinarySearchNearestMonth() {
+        let jan = Date(timeIntervalSince1970: 1_704_067_200) // 2024-01-01
+        let feb = Date(timeIntervalSince1970: 1_706_745_600) // 2024-02-01
+        let mar = Date(timeIntervalSince1970: 1_709_251_200) // 2024-03-01
+
+        let points = [
+            SyncDataPoint(date: jan, type: "Heart Rate", count: 1000),
+            SyncDataPoint(date: jan, type: "Steps", count: 500),
+            SyncDataPoint(date: feb, type: "Heart Rate", count: 2000),
+            SyncDataPoint(date: mar, type: "Sleep", count: 300)
+        ]
+
+        let allIndex = SyncHistoryIndex.build(from: points, selectedCategory: nil)
+        XCTAssertEqual(allIndex.sortedMonths, [jan, feb, mar])
+        XCTAssertEqual(allIndex.total(for: jan), 1500)
+        XCTAssertEqual(allIndex.count(for: jan, category: "Steps"), 500)
+        XCTAssertEqual(allIndex.nearestMonth(to: feb.addingTimeInterval(-3 * 86400)), feb)
+        XCTAssertEqual(allIndex.nearestMonth(to: jan.addingTimeInterval(-86400)), jan)
+        XCTAssertEqual(allIndex.nearestMonth(to: mar.addingTimeInterval(10 * 86400)), mar)
+
+        let hrOnly = SyncHistoryIndex.build(from: points, selectedCategory: "Heart Rate")
+        XCTAssertEqual(hrOnly.sortedMonths, [jan, feb])
+        XCTAssertEqual(hrOnly.total(for: jan), 1000)
+        XCTAssertEqual(hrOnly.visiblePoints.count, 2)
+        // Category breakdown still preserves all categories for scrubbing pills.
+        XCTAssertEqual(hrOnly.count(for: jan, category: "Steps"), 500)
+    }
+
+    func testHealthVitalsSnapshotProducesConsistentHeartRateSleepAndReadiness() {
+        let now = Date(timeIntervalSince1970: 1_700_300_000)
+        let hr = [
+            HeartRateSamplePoint(date: now.addingTimeInterval(-2 * 3600), bpm: 64),
+            HeartRateSamplePoint(date: now.addingTimeInterval(-30 * 60), bpm: 72)
+        ]
+        let rhr = [
+            TimedQuantitySample(date: now.addingTimeInterval(-5 * 86400), value: 54),
+            TimedQuantitySample(date: now.addingTimeInterval(-3 * 86400), value: 54),
+            TimedQuantitySample(date: now.addingTimeInterval(-2 * 86400), value: 54),
+            TimedQuantitySample(date: now.addingTimeInterval(-6 * 3600), value: 51)
+        ]
+        let hrv = [
+            TimedQuantitySample(date: now.addingTimeInterval(-5 * 86400), value: 55),
+            TimedQuantitySample(date: now.addingTimeInterval(-3 * 86400), value: 55),
+            TimedQuantitySample(date: now.addingTimeInterval(-2 * 86400), value: 55),
+            TimedQuantitySample(date: now.addingTimeInterval(-6 * 3600), value: 66)
+        ]
+        let sleep = [
+            RawSleepSample(
+                startDate: now.addingTimeInterval(-10 * 3600),
+                endDate: now.addingTimeInterval(-2 * 3600),
+                categoryValue: HKCategoryValueSleepAnalysis.asleepCore.rawValue,
+                sourceKey: "Apple Watch",
+                isWatchSource: true
+            )
+        ]
+
+        let snapshot = HealthVitalsSnapshot.build(
+            heartRate24h: hr,
+            rhr14d: rhr,
+            hrv14d: hrv,
+            sleep36h: sleep,
+            wristTemp14d: [],
+            windowEnd: now
+        )
+
+        // Heart Rate card and Readiness card agree on exact RHR, HRV, and Sleep values.
+        XCTAssertEqual(snapshot.heartRate.restingHeartRateBPM, 51)
+        XCTAssertEqual(snapshot.heartRate.hrvMilliseconds, 66)
+        XCTAssertEqual(snapshot.sleep.totalAsleepHours, 8.0, accuracy: 0.001)
+        XCTAssertEqual(snapshot.readiness.availableFactorCount, 3)
+        XCTAssertEqual(snapshot.readiness.tier, .optimal)
+    }
+
+    @MainActor
+    func testVitalsSnapshotCacheSavesReloadsAndExpiresStaleSnapshots() {
+        let tempCacheURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vitals-cache-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tempCacheURL) }
+
+        let now = Date()
+        let snapshot = HealthVitalsSnapshot.build(
+            heartRate24h: [HeartRateSamplePoint(date: now.addingTimeInterval(-1800), bpm: 68)],
+            rhr14d: [TimedQuantitySample(date: now.addingTimeInterval(-3600), value: 53)],
+            hrv14d: [TimedQuantitySample(date: now.addingTimeInterval(-3600), value: 64)],
+            sleep36h: [
+                RawSleepSample(
+                    startDate: now.addingTimeInterval(-9 * 3600),
+                    endDate: now.addingTimeInterval(-2 * 3600),
+                    categoryValue: HKCategoryValueSleepAnalysis.asleepCore.rawValue,
+                    sourceKey: "Apple Watch",
+                    isWatchSource: true
+                )
+            ],
+            wristTemp14d: [],
+            windowEnd: now
+        )
+
+        let cache = VitalsSnapshotCache(fileURL: tempCacheURL, maxAge: 48 * 3600)
+        cache.save(snapshot, now: now)
+
+        // Fresh load within 48h restores exact snapshot immediately.
+        XCTAssertEqual(cache.load(now: now.addingTimeInterval(3600)), snapshot)
+
+        // Stale cache older than maxAge is ignored cleanly.
+        XCTAssertNil(cache.load(now: now.addingTimeInterval(49 * 3600)))
+
+        // Store seeds immediately from valid cache on init, then transitions cleanly on refresh.
+        let store = HealthVitalsStore(cache: cache)
+        XCTAssertEqual(store.heartRate, snapshot.heartRate)
+        XCTAssertEqual(store.sleep, snapshot.sleep)
+        XCTAssertEqual(store.readiness, snapshot.readiness)
+
+        let refreshed = HealthVitalsSnapshot.build(
+            heartRate24h: [HeartRateSamplePoint(date: now.addingTimeInterval(-60), bpm: 74)],
+            rhr14d: [TimedQuantitySample(date: now.addingTimeInterval(-3600), value: 52)],
+            hrv14d: [TimedQuantitySample(date: now.addingTimeInterval(-3600), value: 70)],
+            sleep36h: [],
+            wristTemp14d: [],
+            windowEnd: now
+        )
+        store.apply(refreshed, animated: false)
+        XCTAssertEqual(store.heartRate, refreshed.heartRate)
+        XCTAssertEqual(store.readiness, refreshed.readiness)
+    }
 }

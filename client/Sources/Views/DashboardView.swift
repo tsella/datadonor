@@ -2,7 +2,7 @@ import SwiftUI
 import Charts
 import UIKit
 
-struct SyncDataPoint: Identifiable, Equatable {
+struct SyncDataPoint: Identifiable, Equatable, Sendable {
     var id: String { "\(type)-\(Int(date.timeIntervalSince1970))" }
     let date: Date
     let type: String
@@ -10,43 +10,100 @@ struct SyncDataPoint: Identifiable, Equatable {
     var density: Double = 0.8
 }
 
-struct ServerStat: Codable {
+struct ServerStat: Codable, Sendable {
     let date: String
     let type: String
     let count: Int
 }
-struct ServerStatsResponse: Codable {
+
+struct ServerStatsResponse: Codable, Sendable {
     let stats: [ServerStat]
 }
 
-/// Tracks monotonic request generations so an older, slower dashboard fetch cannot
-/// overwrite newer chart data or cache after a refresh supersedes it.
-struct FetchGenerationGuard {
-    private(set) var current: Int = 0
+/// Precomputed lookup tables for `DashboardView` so 60–120Hz drag scrubbing performs O(log N)
+/// month snapping and O(1) totals/breakdowns without filtering or sorting inside `body`.
+struct SyncHistoryIndex: Equatable, Sendable {
+    let visiblePoints: [SyncDataPoint]
+    let sortedMonths: [Date]
+    let visibleTotalByMonth: [Date: Int]
+    let countByMonthAndCategory: [Date: [String: Int]]
 
-    mutating func beginNext() -> Int {
-        current += 1
-        return current
+    static let empty = SyncHistoryIndex(
+        visiblePoints: [],
+        sortedMonths: [],
+        visibleTotalByMonth: [:],
+        countByMonthAndCategory: [:]
+    )
+
+    static func build(from allPoints: [SyncDataPoint], selectedCategory: String?) -> SyncHistoryIndex {
+        var byMonthAndCat: [Date: [String: Int]] = [:]
+        var visible: [SyncDataPoint] = []
+        visible.reserveCapacity(allPoints.count)
+        var visibleTotals: [Date: Int] = [:]
+
+        for point in allPoints {
+            byMonthAndCat[point.date, default: [:]][point.type, default: 0] += point.count
+            if selectedCategory == nil || point.type == selectedCategory {
+                visible.append(point)
+                visibleTotals[point.date, default: 0] += point.count
+            }
+        }
+
+        let months = visibleTotals.keys.sorted()
+        return SyncHistoryIndex(
+            visiblePoints: visible,
+            sortedMonths: months,
+            visibleTotalByMonth: visibleTotals,
+            countByMonthAndCategory: byMonthAndCat
+        )
     }
 
-    func isCurrent(_ generation: Int) -> Bool {
-        generation == current
+    func total(for month: Date) -> Int {
+        visibleTotalByMonth[month] ?? 0
+    }
+
+    func count(for month: Date, category: String) -> Int? {
+        countByMonthAndCategory[month]?[category]
+    }
+
+    /// Binary search for the month closest to `date` in O(log M).
+    func nearestMonth(to date: Date) -> Date? {
+        guard !sortedMonths.isEmpty else { return nil }
+        var low = 0
+        var high = sortedMonths.count - 1
+        while low < high {
+            let mid = (low + high) / 2
+            if sortedMonths[mid] < date {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        if low == 0 { return sortedMonths[0] }
+        let before = sortedMonths[low - 1]
+        let after = sortedMonths[low]
+        return abs(before.timeIntervalSince(date)) <= abs(after.timeIntervalSince(date)) ? before : after
     }
 }
 
 struct DashboardView: View {
     @AppStorage("lastSyncTimestamp") private var storedLastSync: Double = 0.0
+    @AppStorage("cardCollapsed_syncHistory") private var isCollapsed = false
     @EnvironmentObject var healthQueryManager: HealthQueryManager
     @EnvironmentObject var serverDiscoveryManager: ServerDiscoveryManager
     @EnvironmentObject var syncEngine: SyncEngine
     @AppStorage("customServerURL") private var customServerURL = ""
-    
+
     @State private var syncData: [SyncDataPoint]
+    @State private var index: SyncHistoryIndex
+    @State private var selectedMonth: Date?
+    @State private var selectedCategory: String?
     @State private var fetchTask: Task<Void, Never>?
     @State private var fetchGuard = FetchGenerationGuard()
     @State private var lastRefreshCount: Int = 0
 
     private static let cacheKey = "dashboard_cache_months"
+    private static let categories = ["Heart Rate", "Steps", "Sleep", "Workouts"]
 
     private static let statDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -56,101 +113,72 @@ struct DashboardView: View {
         return formatter
     }()
 
+    private static let monthLabelFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM yyyy"
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        return formatter
+    }()
+
     init() {
         if let cachedData = UserDefaults.standard.data(forKey: Self.cacheKey),
            let response = try? JSONDecoder().decode(ServerStatsResponse.self, from: cachedData) {
-            _syncData = State(initialValue: Self.buildPoints(from: response.stats))
+            let points = Self.buildPoints(from: response.stats)
+            _syncData = State(initialValue: points)
+            _index = State(initialValue: SyncHistoryIndex.build(from: points, selectedCategory: nil))
         } else {
             _syncData = State(initialValue: [])
+            _index = State(initialValue: .empty)
         }
     }
-    
-    // Earthy pastel palette matching mockup
-    let chartColors: [String: Color] = [
-        "Heart Rate": Color(red: 223/255.0, green: 107/255.0, blue: 83/255.0),
-        "Steps": Color(red: 103/255.0, green: 139/255.0, blue: 150/255.0),
-        "Sleep": Color(red: 35/255.0, green: 163/255.0, blue: 147/255.0),
-        "Workouts": Color(red: 210/255.0, green: 163/255.0, blue: 91/255.0)
-    ]
-    
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            // Header
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 6) {
+        CollapsibleCard(isCollapsed: $isCollapsed, accessibilityTitle: "Sync History") {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 7) {
+                    Image(systemName: "chart.bar.fill")
+                        .font(.subheadline)
+                        .foregroundColor(AppTheme.Colors.teal)
                     Text("Sync History")
-                        .font(.headline)
+                        .font(.system(.headline, design: .rounded))
                         .foregroundColor(.primary)
-                    
-                    HStack(spacing: 6) {
-                        if healthQueryManager.isSyncing {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("auto-sync on")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else if storedLastSync > 0 {
-                            Text("Last synced \(Date(timeIntervalSince1970: storedLastSync).formatted(date: .omitted, time: .shortened)) · auto-sync on")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else {
-                            Text("No records synced yet.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
                 }
-                
-                Spacer()
-                
-                // Total Count
-                Text(formatCount(healthQueryManager.totalRecordsSynced))
-                    .font(.headline)
-                    .fontWeight(.bold)
-                    .foregroundColor(Color(red: 0.04, green: 0.63, blue: 0.57)) // Teal color
-            }
-            
-            // Animated Chart
-            Chart {
-                ForEach(syncData) { item in
-                    BarMark(
-                        x: .value("Date", item.date, unit: .month),
-                        y: .value("Records", item.count),
-                        width: .ratio(CGFloat(item.density))
-                    )
-                    .foregroundStyle(chartColors[item.type] ?? .gray)
+
+                if let selectedMonth {
+                    Text("\(Self.monthLabelFormatter.string(from: selectedMonth))\(selectedCategory.map { " · \($0)" } ?? "")")
+                        .font(.caption.weight(.medium))
+                        .foregroundColor(AppTheme.Colors.teal)
+                        .monospacedDigit()
+                } else {
+                    syncStatusSubtitle
                 }
             }
-            .chartXAxis {
-                AxisMarks(values: .stride(by: .year)) { _ in
-                    AxisValueLabel(format: .dateTime.year(), anchor: .top)
-                        .foregroundStyle(Color.secondary)
-                        .font(.caption)
+        } headerTrailing: {
+            Text(Self.formatCount(selectedMonth.map(index.total(for:)) ?? healthQueryManager.totalRecordsSynced))
+                .font(.system(.title3, design: .rounded).weight(.bold))
+                .foregroundColor(AppTheme.Colors.teal)
+                .monospacedDigit()
+                .padding(.top, 1)
+                .animation(AppTheme.Animations.readoutUpdate, value: selectedMonth)
+        } content: {
+            if index.visiblePoints.isEmpty {
+                Text("No sync history available yet.")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 48)
+            } else {
+                syncHistoryChart
+                    .frame(height: 225)
+            }
+
+            HStack(spacing: 8) {
+                ForEach(Self.categories, id: \.self) { type in
+                    categoryPill(for: type)
                 }
             }
-            .chartYAxis(.hidden)
-            .chartLegend(.hidden)
-            .frame(height: 250)
-            
-            // Legend at the bottom
-            HStack(spacing: 16) {
-                ForEach(["Heart Rate", "Steps", "Sleep", "Workouts"], id: \.self) { type in
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(chartColors[type] ?? .gray)
-                            .frame(width: 8, height: 8)
-                        Text(type == "Heart Rate" ? "Heart" : type)
-                            .font(.caption)
-                            .foregroundColor(.primary)
-                    }
-                }
-            }
-            .padding(.top, 10)
+            .padding(.top, 2)
         }
-        .padding(20)
-        .background(Color(uiColor: .secondarySystemGroupedBackground))
-        .cornerRadius(20)
-        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
         .task {
             lastRefreshCount = healthQueryManager.totalRecordsSynced
             refreshData()
@@ -180,8 +208,146 @@ struct DashboardView: View {
             }
         }
     }
-    
-    private func formatCount(_ count: Int) -> String {
+
+    @ViewBuilder
+    private var syncStatusSubtitle: some View {
+        HStack(spacing: 6) {
+            if healthQueryManager.isSyncing {
+                ProgressView()
+                    .controlSize(.small)
+                Text("auto-sync on")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else if storedLastSync > 0 {
+                Text("Last synced \(Date(timeIntervalSince1970: storedLastSync).formatted(date: .omitted, time: .shortened)) · auto-sync on")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                Text("No records synced yet.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private var syncHistoryChart: some View {
+        Chart {
+            if let selectedMonth {
+                RuleMark(x: .value("Selected Month", selectedMonth, unit: .month))
+                    .foregroundStyle(Color.secondary.opacity(0.22))
+                    .lineStyle(StrokeStyle(lineWidth: 1.25, dash: [3, 3]))
+            }
+
+            ForEach(index.visiblePoints) { item in
+                let baseColor = AppTheme.Colors.syncCategoryColor(for: item.type)
+                let isDimmed = (selectedMonth != nil && selectedMonth != item.date)
+
+                BarMark(
+                    x: .value("Date", item.date, unit: .month),
+                    y: .value("Records", item.count),
+                    width: .ratio(0.76)
+                )
+                .foregroundStyle(AppTheme.Colors.barGradient(for: baseColor, dimmed: isDimmed))
+                .cornerRadius(4)
+            }
+        }
+        .chartXAxis {
+            AxisMarks(values: .stride(by: .year)) { value in
+                AxisGridLine(stroke: AppTheme.Layout.gridStroke)
+                    .foregroundStyle(AppTheme.Colors.gridLine)
+                AxisValueLabel(anchor: .top) {
+                    if let date = value.as(Date.self) {
+                        Text(date.formatted(.dateTime.year()))
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .trailing, values: .automatic(desiredCount: 4)) { value in
+                AxisGridLine(stroke: AppTheme.Layout.gridStroke)
+                    .foregroundStyle(AppTheme.Colors.gridLine)
+                AxisValueLabel {
+                    if let count = value.as(Int.self) {
+                        Text(Self.formatCount(count))
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .foregroundColor(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+            }
+        }
+        .chartLegend(.hidden)
+        .chartOverlay { proxy in
+            DateChartScrubOverlay(
+                proxy: proxy,
+                onScrubDate: { date in
+                    let nearest = index.nearestMonth(to: date)
+                    if nearest != selectedMonth {
+                        selectedMonth = nearest
+                    }
+                },
+                onEnd: {
+                    if selectedMonth != nil {
+                        withAnimation(AppTheme.Animations.scrubRelease) {
+                            selectedMonth = nil
+                        }
+                    }
+                }
+            )
+        }
+    }
+
+    private func categoryPill(for type: String) -> some View {
+        let color = AppTheme.Colors.syncCategoryColor(for: type)
+        let isSoloed = (selectedCategory == type)
+        let isDimmed = (selectedCategory != nil && !isSoloed)
+        let monthCount = selectedMonth.flatMap { index.count(for: $0, category: type) }
+        let shortName = (type == "Heart Rate") ? "Heart" : type
+
+        return Button {
+            withAnimation(AppTheme.Animations.collapse) {
+                let nextCategory = isSoloed ? nil : type
+                selectedCategory = nextCategory
+                index = SyncHistoryIndex.build(from: syncData, selectedCategory: nextCategory)
+            }
+        } label: {
+            VStack(spacing: 2) {
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(color)
+                        .frame(width: 7, height: 7)
+                    Text(shortName)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                }
+
+                if let monthCount {
+                    Text(Self.formatCount(monthCount))
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundColor(.secondary)
+                        .monospacedDigit()
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: AppTheme.Layout.chipCornerRadius, style: .continuous)
+                    .fill(isSoloed ? color.opacity(0.16) : AppTheme.Colors.insetSurface)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: AppTheme.Layout.chipCornerRadius, style: .continuous)
+                    .strokeBorder(isSoloed ? color.opacity(0.45) : AppTheme.Colors.cardBorder, lineWidth: 1)
+            )
+            .opacity(isDimmed ? 0.45 : 1.0)
+        }
+        .buttonStyle(.plain)
+    }
+
+    static func formatCount(_ count: Int) -> String {
         if count >= 1_000_000 {
             return String(format: "%.2fM", Double(count) / 1_000_000.0)
         } else if count >= 1_000 {
@@ -190,7 +356,7 @@ struct DashboardView: View {
             return "\(count)"
         }
     }
-    
+
     private func refreshData() {
         fetchTask?.cancel()
         let generation = fetchGuard.beginNext()
@@ -199,7 +365,7 @@ struct DashboardView: View {
             await fetchDashboardStats(generation: generation)
         }
     }
-    
+
     @MainActor
     private func fetchDashboardStats(generation: Int) async {
         let apiKey = ServerResolver.loadApiKey()
@@ -208,7 +374,7 @@ struct DashboardView: View {
                   override: customServerURL,
                   discovered: serverDiscoveryManager.activeServerURL) else { return }
         let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? ""
-        
+
         do {
             let data = try await syncEngine.fetchStats(
                 serverURL: serverURL,
@@ -217,11 +383,22 @@ struct DashboardView: View {
                 deviceId: deviceId
             )
             guard !Task.isCancelled, fetchGuard.isCurrent(generation) else { return }
-            
-            if let decoded = try? JSONDecoder().decode(ServerStatsResponse.self, from: data) {
-                UserDefaults.standard.set(data, forKey: Self.cacheKey)
-                updateChartData(from: decoded.stats, animated: true)
+
+            let activeCategory = selectedCategory
+            let decoded: ([SyncDataPoint], SyncHistoryIndex)? = await Task.detached(priority: .utility) {
+                guard let response = try? JSONDecoder().decode(ServerStatsResponse.self, from: data) else {
+                    return nil
+                }
+                let points = Self.buildPoints(from: response.stats)
+                let builtIndex = SyncHistoryIndex.build(from: points, selectedCategory: activeCategory)
+                return (points, builtIndex)
+            }.value
+
+            guard !Task.isCancelled, fetchGuard.isCurrent(generation), let (newPoints, newIndex) = decoded else {
+                return
             }
+            UserDefaults.standard.set(data, forKey: Self.cacheKey)
+            applyUpdatedData(points: newPoints, index: newIndex, animated: true)
         } catch {
             if !(error is CancellationError) {
                 print("Dashboard fetch failed: \(error)")
@@ -229,8 +406,12 @@ struct DashboardView: View {
         }
     }
 
-    private static func buildPoints(from serverStats: [ServerStat]) -> [SyncDataPoint] {
-        let formatter = Self.statDateFormatter
+    nonisolated private static func buildPoints(from serverStats: [ServerStat]) -> [SyncDataPoint] {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+
         var newPoints: [SyncDataPoint] = []
         newPoints.reserveCapacity(serverStats.count)
         for stat in serverStats {
@@ -240,18 +421,23 @@ struct DashboardView: View {
         }
         return newPoints
     }
-    
+
     @MainActor
-    private func updateChartData(from serverStats: [ServerStat], animated: Bool) {
-        let newPoints = Self.buildPoints(from: serverStats)
-        guard newPoints != self.syncData else { return }
-        
+    private func applyUpdatedData(points: [SyncDataPoint], index newIndex: SyncHistoryIndex, animated: Bool) {
+        guard points != syncData else { return }
+        // Rebuild index if selectedCategory changed while decoding off-actor.
+        let finalIndex = (selectedCategory == nil && newIndex.visiblePoints.count == points.count)
+            ? newIndex
+            : SyncHistoryIndex.build(from: points, selectedCategory: selectedCategory)
+
         if animated && UIApplication.shared.applicationState == .active {
-            withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-                self.syncData = newPoints
+            withAnimation(AppTheme.Animations.chartUpdate) {
+                syncData = points
+                index = finalIndex
             }
         } else {
-            self.syncData = newPoints
+            syncData = points
+            index = finalIndex
         }
     }
 }

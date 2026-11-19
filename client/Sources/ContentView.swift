@@ -7,199 +7,79 @@ struct ContentView: View {
     @EnvironmentObject var healthQueryManager: HealthQueryManager
     @EnvironmentObject var syncEngine: SyncEngine
     @AppStorage("customServerURL") private var customServerURL = ""
-    
-    
+    @AppStorage("cardCollapsed_server") private var isServerCardCollapsed = false
+
+    @StateObject private var vitalsStore = HealthVitalsStore()
+
     var body: some View {
         NavigationStack {
             ZStack {
-                // Adaptive system background
-                Color(uiColor: .systemGroupedBackground)
+                AppTheme.Colors.groupedBackground
                     .ignoresSafeArea()
-                
+
                 ScrollView(showsIndicators: false) {
-                    VStack(spacing: 25) {
-                        // Header Logo & Title
-                        HStack(alignment: .center, spacing: 12) {
-                            Image("Logo")
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                                .frame(width: 44, height: 44)
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                                .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
-                            
-                            Text("DataDonor")
-                                .font(.system(size: 28, weight: .bold, design: .rounded))
-                                .foregroundColor(.primary)
-                            
-                            Spacer()
-                            
-                            NavigationLink(destination: SettingsView()) {
-                                Image(systemName: "gearshape.fill")
-                                    .font(.title3)
-                                    .foregroundColor(.secondary)
-                                    .padding(12)
-                                    .background(Color(uiColor: .secondarySystemGroupedBackground))
-                                    .clipShape(Circle())
-                                    .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
-                            }
-                        }
-                        .padding(.horizontal, 20)
-                        .padding(.top, 10)
-                        
-                        // Server Connection Card
-                        VStack(spacing: 12) {
-                            if let url = ServerResolver.resolve(override: customServerURL, discovered: serverDiscoveryManager.activeServerURL) {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Connected to Server")
-                                            .font(.headline)
-                                            .foregroundColor(.primary)
-                                        
-                                        // Extract host and port
-                                        if let host = url.host, let port = url.port {
-                                            Text("\(host):\(String(port))")
-                                                .font(.subheadline)
-                                                .foregroundColor(.secondary)
-                                        } else {
-                                            Text(url.absoluteString)
-                                                .font(.subheadline)
-                                                .foregroundColor(.secondary)
-                                        }
-                                    }
-                                    
-                                    Spacer()
-                                    
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .font(.title2)
-                                        .foregroundColor(Color(red: 0.04, green: 0.63, blue: 0.57)) // Teal checkmark
-                                }
-                            } else if ServerResolver.overrideIsInvalid(customServerURL) {
-                                HStack {
-                                    Image(systemName: "exclamationmark.triangle.fill")
-                                        .foregroundColor(.orange)
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Invalid Server URL")
-                                            .font(.headline)
-                                            .foregroundColor(.primary)
-                                        Text("Include a scheme, e.g. https://192.168.1.5:8443")
-                                            .font(.subheadline)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    Spacer()
-                                }
-                            } else {
-                                HStack {
-                                    ProgressView()
-                                        .tint(.secondary)
-                                    Text("Discovering Server...")
-                                        .font(.headline)
-                                        .foregroundColor(.secondary)
-                                        .padding(.leading, 8)
-                                    Spacer()
-                                }
-                            }
-                        }
-                        .padding(20)
-                        .background(Color(uiColor: .secondarySystemGroupedBackground))
-                        .cornerRadius(20)
-                        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
-                        .padding(.horizontal, 20)
-                        
-                        // Dashboard Chart
+                    VStack(spacing: AppTheme.Layout.cardStackSpacing) {
+                        headerBar
+                            .padding(.horizontal, AppTheme.Layout.screenHorizontalPadding)
+                            .padding(.top, 10)
+
+                        serverConnectionCard
+                            .padding(.horizontal, AppTheme.Layout.screenHorizontalPadding)
+
                         DashboardView()
-                            .padding(.horizontal, 20)
-                        
-                        Spacer(minLength: 20)
-                        
-                        // Action Button
-                        if !healthStoreManager.isAuthorized {
-                            Button(action: {
-                                healthStoreManager.requestAuthorization()
-                            }) {
-                                HStack {
-                                    Image(systemName: "heart.fill")
-                                    Text("Grant Health Access")
-                                        .fontWeight(.semibold)
-                                }
-                                .font(.headline)
-                                .foregroundColor(.white)
-                                .padding(.vertical, 16)
-                                .frame(maxWidth: .infinity)
-                                .background(Color(red: 0.04, green: 0.63, blue: 0.57)) // Solid Teal
-                                .cornerRadius(16)
-                                .shadow(color: Color(red: 0.04, green: 0.63, blue: 0.57).opacity(0.3), radius: 10, x: 0, y: 5)
-                            }
-                            .padding(.horizontal, 20)
+                            .padding(.horizontal, AppTheme.Layout.screenHorizontalPadding)
+
+                        VitalsCardsSection(
+                            vitalsStore: vitalsStore,
+                            isAuthorized: healthStoreManager.isAuthorized
+                        )
+                        .padding(.horizontal, AppTheme.Layout.screenHorizontalPadding)
+
+                        Spacer(minLength: 16)
+
+                        actionButton
+                            .padding(.horizontal, AppTheme.Layout.screenHorizontalPadding)
                             .padding(.bottom, 20)
-                        } else {
-                            if healthQueryManager.isSyncing {
-                                Button(action: {
-                                    healthQueryManager.cancelSync()
-                                }) {
-                                    HStack {
-                                        Image(systemName: "stop.circle.fill")
-                                        Text("Stop Sync")
-                                            .fontWeight(.semibold)
-                                    }
-                                    .font(.headline)
-                                    .foregroundColor(.white)
-                                    .padding(.vertical, 16)
-                                    .frame(maxWidth: .infinity)
-                                    .background(Color.red.opacity(0.9))
-                                    .cornerRadius(16)
-                                    .shadow(color: Color.red.opacity(0.3), radius: 10, x: 0, y: 5)
-                                }
-                                .padding(.horizontal, 20)
-                                .padding(.bottom, 20)
-                            } else {
-                                Button(action: {
-                                    let currentKey = ServerResolver.loadApiKey()
-                                    Task {
-                                        await healthQueryManager.performSync(
-                                            syncEngine: syncEngine,
-                                            serverURL: ServerResolver.resolve(
-                                                override: customServerURL,
-                                                discovered: serverDiscoveryManager.activeServerURL),
-                                            apiKey: currentKey
-                                        )
-                                    }
-                                }) {
-                                    HStack {
-                                        Image(systemName: "arrow.triangle.2.circlepath")
-                                        Text("Sync Now")
-                                            .fontWeight(.semibold)
-                                    }
-                                    .font(.headline)
-                                    .foregroundColor(.white)
-                                    .padding(.vertical, 16)
-                                    .frame(maxWidth: .infinity)
-                                    .background(Color(red: 0.04, green: 0.63, blue: 0.57)) // Solid Teal
-                                    .cornerRadius(16)
-                                    .shadow(color: Color(red: 0.04, green: 0.63, blue: 0.57).opacity(0.3), radius: 10, x: 0, y: 5)
-                                }
-                                .padding(.horizontal, 20)
-                                .padding(.bottom, 20)
-                            }
-                        }
                     }
                     .padding(.top, 10)
                 }
             }
             .navigationTitle("")
             .navigationBarHidden(true)
+            .task {
+                vitalsStore.refresh(
+                    healthStore: healthStoreManager.healthStore,
+                    isAuthorized: healthStoreManager.isAuthorized
+                )
+            }
             .onAppear {
                 serverDiscoveryManager.startDiscovery()
+            }
+            .onDisappear {
+                vitalsStore.cancel()
             }
             .onChange(of: scenePhase) { newPhase in
                 switch newPhase {
                 case .active:
                     serverDiscoveryManager.startDiscovery()
+                    vitalsStore.refresh(
+                        healthStore: healthStoreManager.healthStore,
+                        isAuthorized: healthStoreManager.isAuthorized
+                    )
                 case .background:
                     serverDiscoveryManager.stopDiscovery()
                     BackgroundSyncManager.shared.scheduleAppRefresh()
                     BackgroundSyncManager.shared.scheduleProcessing()
                 default:
                     break
+                }
+            }
+            .onChange(of: healthStoreManager.isAuthorized) { authorized in
+                if authorized {
+                    vitalsStore.refresh(
+                        healthStore: healthStoreManager.healthStore,
+                        isAuthorized: true
+                    )
                 }
             }
             .onChange(of: serverDiscoveryManager.activeServerURL) { newURL in
@@ -215,6 +95,12 @@ struct ContentView: View {
                 }
             }
             .onChange(of: healthQueryManager.isSyncing) { isSyncing in
+                if !isSyncing {
+                    vitalsStore.refresh(
+                        healthStore: healthStoreManager.healthStore,
+                        isAuthorized: healthStoreManager.isAuthorized
+                    )
+                }
                 // Defer out of SwiftUI's CoreAnimation commit handler phase so UIKit's
                 // idle-timer transaction doesn't trigger CA::Transaction::add_commit_handler errors.
                 DispatchQueue.main.async {
@@ -222,10 +108,6 @@ struct ContentView: View {
                         isSyncing && UIApplication.shared.applicationState == .active
                 }
             }
-            // Presentation is derived from the model rather than driven by transitions:
-            // whenever a server is pending approval the alert is shown, so re-discovering
-            // the same server needs no publisher trickery and dismissing clears the pending
-            // value at its source.
             .alert("New Server Discovered", isPresented: Binding(
                 get: { serverDiscoveryManager.pendingApprovalURL != nil },
                 set: { if !$0 { serverDiscoveryManager.pendingApprovalURL = nil } }
@@ -243,6 +125,187 @@ struct ContentView: View {
                     Text("Would you like to connect to this new server?")
                 }
             }
+        }
+    }
+
+    // MARK: - Subviews
+
+    private var headerBar: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image("Logo")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: AppTheme.Layout.chipCornerRadius, style: .continuous))
+                .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
+
+            Text("DataDonor")
+                .font(.system(size: 28, weight: .bold, design: .rounded))
+                .foregroundColor(.primary)
+
+            Spacer()
+
+            NavigationLink(destination: SettingsView()) {
+                Image(systemName: "gearshape.fill")
+                    .font(.title3)
+                    .foregroundColor(.secondary)
+                    .padding(12)
+                    .background(AppTheme.Colors.cardSurface)
+                    .clipShape(Circle())
+                    .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var serverConnectionCard: some View {
+        let resolvedURL = ServerResolver.resolve(
+            override: customServerURL,
+            discovered: serverDiscoveryManager.activeServerURL
+        )
+
+        CollapsibleCard(
+            isCollapsed: $isServerCardCollapsed,
+            accessibilityTitle: "Server Connection",
+            contentSpacing: 10
+        ) {
+            if resolvedURL != nil {
+                Text("Connected to Server")
+                    .font(.system(.headline, design: .rounded))
+                    .foregroundColor(.primary)
+            } else if ServerResolver.overrideIsInvalid(customServerURL) {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(AppTheme.Colors.warning)
+                    Text("Invalid Server URL")
+                        .font(.system(.headline, design: .rounded))
+                        .foregroundColor(.primary)
+                }
+            } else {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .tint(.secondary)
+                    Text("Discovering Server...")
+                        .font(.system(.headline, design: .rounded))
+                        .foregroundColor(.secondary)
+                }
+            }
+        } headerTrailing: {
+            if resolvedURL != nil {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.title3)
+                    .foregroundColor(AppTheme.Colors.teal)
+                    .padding(.top, 2)
+            }
+        } content: {
+            if let url = resolvedURL {
+                if let host = url.host, let port = url.port {
+                    Text("\(host):\(String(port))")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                } else {
+                    Text(url.absoluteString)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+            } else if ServerResolver.overrideIsInvalid(customServerURL) {
+                Text("Include a scheme, e.g. https://192.168.1.5:8443")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            } else {
+                Text("Searching local network for _datadonor._tcp")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var actionButton: some View {
+        if !healthStoreManager.isAuthorized {
+            primaryActionButton(
+                title: "Grant Health Access",
+                systemImage: "heart.fill",
+                tint: AppTheme.Colors.teal
+            ) {
+                healthStoreManager.requestAuthorization()
+            }
+        } else if healthQueryManager.isSyncing {
+            primaryActionButton(
+                title: "Stop Sync",
+                systemImage: "stop.circle.fill",
+                tint: AppTheme.Colors.destructive
+            ) {
+                healthQueryManager.cancelSync()
+            }
+        } else {
+            primaryActionButton(
+                title: "Sync Now",
+                systemImage: "arrow.triangle.2.circlepath",
+                tint: AppTheme.Colors.teal
+            ) {
+                let currentKey = ServerResolver.loadApiKey()
+                Task {
+                    await healthQueryManager.performSync(
+                        syncEngine: syncEngine,
+                        serverURL: ServerResolver.resolve(
+                            override: customServerURL,
+                            discovered: serverDiscoveryManager.activeServerURL),
+                        apiKey: currentKey
+                    )
+                }
+            }
+        }
+    }
+
+    private func primaryActionButton(
+        title: String,
+        systemImage: String,
+        tint: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack {
+                Image(systemName: systemImage)
+                Text(title)
+                    .fontWeight(.semibold)
+            }
+            .font(.system(.headline, design: .rounded))
+            .foregroundColor(.white)
+            .padding(.vertical, 16)
+            .frame(maxWidth: .infinity)
+            .background(tint)
+            .clipShape(RoundedRectangle(cornerRadius: AppTheme.Layout.buttonCornerRadius, style: .continuous))
+            .shadow(color: tint.opacity(0.3), radius: 10, x: 0, y: 5)
+        }
+    }
+}
+
+/// Isolates vitals cards from `HealthQueryManager` observation so rapid `totalRecordsSynced`
+/// updates during a sync never trigger unnecessary chart re-renders.
+private struct VitalsCardsSection: View {
+    @ObservedObject var vitalsStore: HealthVitalsStore
+    let isAuthorized: Bool
+
+    var body: some View {
+        VStack(spacing: AppTheme.Layout.cardStackSpacing) {
+            HeartRateCardView(
+                summary: vitalsStore.heartRate,
+                isAuthorized: isAuthorized,
+                isLoading: vitalsStore.isLoading
+            )
+
+            SleepCardView(
+                summary: vitalsStore.sleep,
+                isAuthorized: isAuthorized,
+                isLoading: vitalsStore.isLoading
+            )
+
+            ReadinessCardView(
+                summary: vitalsStore.readiness,
+                isAuthorized: isAuthorized,
+                isLoading: vitalsStore.isLoading
+            )
         }
     }
 }
