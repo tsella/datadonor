@@ -8,36 +8,76 @@ struct SyncError: LocalizedError {
 }
 
 class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTaskDelegate, URLSessionDataDelegate {
+    /// Selects how uploads are dispatched:
+    /// - `immediate`: in-process `ephemeral` session. Must be used during background wakes
+    ///   (`HKObserverQuery`, `BGAppRefreshTask`, `BGProcessingTask`) because iOS forces any
+    ///   `URLSessionConfiguration.background` task started while backgrounded to
+    ///   `isDiscretionary = true`, stalling `await` until the background window expires.
+    /// - `background`: out-of-process `URLSessionConfiguration.background` session. Used for
+    ///   foreground-initiated syncs/backfills where `isDiscretionary = false` is honored and
+    ///   uploads should keep running if the user switches away.
+    enum Transport: Sendable {
+        case immediate
+        case background
+    }
+
+    /// Pairs a deterministic batch token (shared across retries of the same un-advanced
+    /// HealthKit anchor) with a unique per-attempt ID so overlapping attempts never collide
+    /// on staging files, response bodies, or continuations.
+    struct UploadTaskIdentity: Equatable, Sendable {
+        let batchToken: String
+        let attemptId: String
+
+        var taskDescription: String { "\(batchToken)|\(attemptId)" }
+
+        init(batchToken: String, attemptId: String = UUID().uuidString) {
+            self.batchToken = batchToken
+            self.attemptId = attemptId
+        }
+
+        init?(taskDescription: String?) {
+            guard let desc = taskDescription, !desc.isEmpty else { return nil }
+            if let sep = desc.lastIndex(of: "|") {
+                let batch = String(desc[..<sep])
+                let attempt = String(desc[desc.index(after: sep)...])
+                guard !batch.isEmpty, !attempt.isEmpty else { return nil }
+                self.batchToken = batch
+                self.attemptId = attempt
+            } else {
+                // Backward compatibility for legacy pre-upgrade in-flight tasks.
+                self.batchToken = desc
+                self.attemptId = desc
+            }
+        }
+    }
+
     private var session: URLSession!
     private var ephemeralSession: URLSession!
-    var backgroundCompletionHandler: (() -> Void)?
+    private var backgroundCompletionHandler: (() -> Void)?
+    private var pendingBackgroundEventsFinished = false
 
-    /// Continuations for in-flight uploads, keyed by a client-generated upload token that
-    /// we stash in `URLSessionTask.taskDescription`.
-    ///
-    /// Deliberately *not* keyed by `taskIdentifier`: identifiers are only unique within a
-    /// single session instance, and after the app is relaunched the reattached background
-    /// session reissues them from a low number. A new upload could then collide with a
-    /// reattached task and resume the wrong continuation — advancing an anchor past data
-    /// the server never acknowledged. Guarded by `stateLock` because URLSession delegate
-    /// callbacks arrive on its own operation queue.
+    /// Continuations for in-flight uploads, keyed by per-attempt `attemptId` (not by
+    /// `taskIdentifier`, which resets across relaunch, and not by `batchToken`, which
+    /// collides across retries of the same un-advanced anchor).
     private var pendingUploads: [String: CheckedContinuation<Void, Error>] = [:]
-    /// Response bodies accumulated per upload token, so we can report server-side errors.
+    /// Response bodies accumulated per `attemptId`, so overlapping retries never interleave.
     private var responseBodies: [String: Data] = [:]
-    /// Temp payload files to clean up once their task finishes.
+    /// Temp payload files owned by each `attemptId`, deleted only when that attempt finishes.
     private var payloadFiles: [String: URL] = [:]
+    /// Attempt IDs whose `onCancel` fired before continuation registration completed.
+    private var cancelledAttempts: Set<String> = []
     private let stateLock = NSLock()
 
     /// Uploads that were in flight when the process died. A background session keeps
     /// uploading across app termination, so on relaunch the task completes with nobody
     /// waiting on it. Recording the outcome here lets the next sync tell "the server
     /// accepted this batch" apart from "this batch never went out".
-    private let orphanStore = OrphanedUploadStore()
+    internal let orphanStore: OrphanedUploadStore
 
-    /// Reads the token we attached at creation time. Returns nil for the ephemeral
-    /// session's tasks, which don't participate in this bookkeeping.
-    private func token(for task: URLSessionTask) -> String? {
-        task.taskDescription
+    /// Reads the batch/attempt identity attached at creation time. Returns nil for the
+    /// ephemeral session's tasks, which don't participate in background-session bookkeeping.
+    private func identity(for task: URLSessionTask) -> UploadTaskIdentity? {
+        UploadTaskIdentity(taskDescription: task.taskDescription)
     }
 
     /// Scoped access to the state guarded by `stateLock`.
@@ -54,19 +94,64 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
     }
 
     /// Hosts the user has explicitly approved, with the SPKI hash pinned on first contact.
-    private let trustStore = ServerTrustStore.shared
+    private let trustStore: ServerTrustStore
 
-    override init() {
+    convenience override init() {
+        self.init(
+            sessionIdentifier: "la.tsel.datadonor.sync",
+            orphanStore: OrphanedUploadStore(),
+            trustStore: .shared
+        )
+    }
+
+    init(
+        sessionIdentifier: String,
+        orphanStore: OrphanedUploadStore = OrphanedUploadStore(),
+        trustStore: ServerTrustStore = .shared,
+        createBackgroundSession: Bool = true
+    ) {
+        self.orphanStore = orphanStore
+        self.trustStore = trustStore
         super.init()
-        let configuration = URLSessionConfiguration.background(withIdentifier: "la.tsel.datadonor.sync")
-        configuration.isDiscretionary = false // Try to sync immediately when triggered
-        configuration.sessionSendsLaunchEvents = true
-        self.session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+
+        if createBackgroundSession {
+            let configuration = URLSessionConfiguration.background(withIdentifier: sessionIdentifier)
+            configuration.isDiscretionary = false // Honored for foreground-initiated syncs
+            configuration.sessionSendsLaunchEvents = true
+            self.session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+        } else {
+            self.session = URLSession(configuration: .ephemeral, delegate: self, delegateQueue: nil)
+        }
 
         let ephemeralConfig = URLSessionConfiguration.ephemeral
         self.ephemeralSession = URLSession(configuration: ephemeralConfig, delegate: self, delegateQueue: nil)
 
         Self.pruneStaleTempFiles()
+    }
+
+    /// Attaches the system completion handler from `handleEventsForBackgroundURLSession`.
+    /// Handles both arrival orders (handler set before or after `urlSessionDidFinishEvents`)
+    /// and invokes any uncalled prior handler rather than leaking it.
+    func setBackgroundCompletionHandler(_ handler: @escaping () -> Void) {
+        let toInvokeNow: [() -> Void] = withState {
+            var callbacks: [() -> Void] = []
+            if let previous = backgroundCompletionHandler {
+                callbacks.append(previous)
+                backgroundCompletionHandler = nil
+            }
+            if pendingBackgroundEventsFinished {
+                pendingBackgroundEventsFinished = false
+                callbacks.append(handler)
+            } else {
+                backgroundCompletionHandler = handler
+            }
+            return callbacks
+        }
+        if !toInvokeNow.isEmpty {
+            DispatchQueue.main.async {
+                for cb in toInvokeNow { cb() }
+            }
+        }
     }
 
     /// Cleans up any staged `.json` / `.json.gz` upload files left behind in `temporaryDirectory`
@@ -118,65 +203,126 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
     }
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        handleBackgroundEventsFinished()
+    }
+
+    internal func handleBackgroundEventsFinished() {
         DataDonorLogger.shared.log("SyncEngine: All background events finished.", level: .info)
-        DispatchQueue.main.async {
-            self.backgroundCompletionHandler?()
-            self.backgroundCompletionHandler = nil
+        let handler: (() -> Void)? = withState {
+            if let existing = backgroundCompletionHandler {
+                backgroundCompletionHandler = nil
+                pendingBackgroundEventsFinished = false
+                return existing
+            }
+            pendingBackgroundEventsFinished = true
+            return nil
+        }
+        if let handler {
+            DispatchQueue.main.async {
+                handler()
+            }
         }
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        guard let token = token(for: dataTask) else { return }
-        withState { responseBodies[token, default: Data()].append(data) }
+        guard let identity = identity(for: dataTask) else { return }
+        handleUploadData(data, for: identity)
+    }
+
+    internal func handleUploadData(_ data: Data, for identity: UploadTaskIdentity) {
+        withState { responseBodies[identity.attemptId, default: Data()].append(data) }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard let token = token(for: task) else { return }
+        guard let identity = identity(for: task) else { return }
+        handleUploadCompletion(
+            for: identity,
+            httpResponse: task.response as? HTTPURLResponse,
+            error: error
+        )
+    }
 
+    /// Registers a background upload attempt under `identity.attemptId`. Returns `false` if
+    /// cancellation already landed before registration, in which case the caller must abort
+    /// without starting the task.
+    internal func registerUploadAttempt(
+        identity: UploadTaskIdentity,
+        fileURL: URL,
+        continuation: CheckedContinuation<Void, Error>,
+        isTaskCancelled: Bool
+    ) -> Bool {
+        withState {
+            if cancelledAttempts.remove(identity.attemptId) != nil || isTaskCancelled {
+                return false
+            }
+            pendingUploads[identity.attemptId] = continuation
+            payloadFiles[identity.attemptId] = fileURL
+            return true
+        }
+    }
+
+    /// Cancels an upload attempt's waiter. If called before `registerUploadAttempt`, records
+    /// the attempt ID in `cancelledAttempts` so registration aborts immediately instead of
+    /// hanging.
+    internal func cancelUploadAttempt(attemptId: String) {
+        let continuation: CheckedContinuation<Void, Error>? = withState {
+            if let existing = pendingUploads.removeValue(forKey: attemptId) {
+                return existing
+            }
+            cancelledAttempts.insert(attemptId)
+            return nil
+        }
+        continuation?.resume(throwing: CancellationError())
+    }
+
+    internal func handleUploadCompletion(
+        for identity: UploadTaskIdentity,
+        httpResponse: HTTPURLResponse?,
+        error: Error?
+    ) {
         let (continuation, body, payloadFile) = withState {
-            (pendingUploads.removeValue(forKey: token),
-             responseBodies.removeValue(forKey: token),
-             payloadFiles.removeValue(forKey: token))
+            (pendingUploads.removeValue(forKey: identity.attemptId),
+             responseBodies.removeValue(forKey: identity.attemptId),
+             payloadFiles.removeValue(forKey: identity.attemptId))
         }
 
         if let payloadFile = payloadFile {
             try? FileManager.default.removeItem(at: payloadFile)
         }
 
-        // No continuation means the process died while this upload was in flight and the
-        // background session finished it after relaunch. Nobody is awaiting the result, so
-        // record it: a 2xx here means the server holds a batch whose anchor was never
-        // advanced, and the next sync would otherwise resend it blind.
+        // No continuation means the caller cancelled or the process died while this upload
+        // was in flight. A 2xx here is recorded under the deterministic `batchToken` so the
+        // next sync advances the anchor instead of resending blind.
         let isOrphan = continuation == nil
 
         if let error = error {
             DataDonorLogger.shared.log(
-                "SyncEngine: Upload \(token) failed with error: \(error.localizedDescription)", level: .error)
+                "SyncEngine: Upload \(identity.batchToken.prefix(12))… [\(identity.attemptId.prefix(8))] failed with error: \(error.localizedDescription)", level: .error)
             continuation?.resume(throwing: error)
             return
         }
 
-        guard let response = task.response as? HTTPURLResponse else {
+        guard let response = httpResponse else {
             let err = SyncError(message: "Upload finished with no HTTP response")
-            DataDonorLogger.shared.log("SyncEngine: Upload \(token) \(err.message)", level: .error)
+            DataDonorLogger.shared.log("SyncEngine: Upload \(identity.batchToken.prefix(12))… \(err.message)", level: .error)
             continuation?.resume(throwing: err)
             return
         }
 
         if (200...299).contains(response.statusCode) {
             DataDonorLogger.shared.log(
-                "SyncEngine: Upload \(token) completed successfully (Status: \(response.statusCode))", level: .info)
+                "SyncEngine: Upload \(identity.batchToken.prefix(12))… completed successfully (Status: \(response.statusCode))", level: .info)
             if isOrphan {
                 DataDonorLogger.shared.log(
-                    "SyncEngine: Upload \(token) completed after relaunch with no waiter; " +
+                    "SyncEngine: Upload \(identity.batchToken.prefix(12))… completed with no waiter; " +
                     "recording server acknowledgement.", level: .warn)
-                orphanStore.recordSuccess(token: token)
+                orphanStore.recordSuccess(token: identity.batchToken)
             }
             continuation?.resume(returning: ())
         } else {
             let detail = body.flatMap { String(data: $0, encoding: .utf8) } ?? ""
             let err = SyncError(message: "Server returned status \(response.statusCode). \(detail)")
-            DataDonorLogger.shared.log("SyncEngine: Upload \(token) \(err.message)", level: .error)
+            DataDonorLogger.shared.log("SyncEngine: Upload \(identity.batchToken.prefix(12))… \(err.message)", level: .error)
             continuation?.resume(throwing: err)
         }
     }
@@ -203,9 +349,10 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
         return request
     }
 
-    func fetchServerCheckpoint(serverURL: URL, apiKey: String, deviceId: String) async throws -> (checkpoints: [String: String], totalRecords: Int)? {
+    func fetchServerCheckpoint(serverURL: URL, apiKey: String, deviceId: String, timeout: TimeInterval = 15) async throws -> (checkpoints: [String: String], totalRecords: Int)? {
         let url = serverURL.appendingPathComponent("/api/v1/health-sync/checkpoint")
-        let request = makeRequest(url: url, method: "GET", apiKey: apiKey, deviceId: deviceId)
+        var request = makeRequest(url: url, method: "GET", apiKey: apiKey, deviceId: deviceId)
+        request.timeoutInterval = timeout
 
         let (data, response) = try await ephemeralSession.data(for: request)
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
@@ -218,9 +365,10 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
         return nil
     }
 
-    func ping(url: URL, apiKey: String) async throws -> Bool {
-        let request = makeRequest(
+    func ping(url: URL, apiKey: String, timeout: TimeInterval = 5) async throws -> Bool {
+        var request = makeRequest(
             url: url.appendingPathComponent("/api/v1/ping"), method: "GET", apiKey: apiKey)
+        request.timeoutInterval = timeout
 
         let (_, response) = try await ephemeralSession.data(for: request)
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
@@ -284,19 +432,35 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
+    /// Deterministic upload token for a combined multi-type batch.
+    static func combinedBatchToken(parts: [String]) -> String {
+        let raw = parts.sorted().joined(separator: "\n")
+        let digest = SHA256.hash(data: Data(raw.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
     /// Uploads a payload and waits for the server to acknowledge it.
     ///
     /// Returns normally only when the server has stored the batch — either because it
-    /// responded 2xx on this attempt, or because it acknowledged an earlier attempt of the
-    /// same upload while the app was suspended or killed. The caller may then safely
-    /// advance its anchor; anything else throws.
-    ///
-    /// Orphan bookkeeping is entirely internal: callers cannot forget a step and silently
-    /// re-upload a batch the server already holds.
+    /// responded 2xx on this attempt, or (for `.background` transport) because it
+    /// acknowledged an earlier attempt of the same upload while the app was suspended or
+    /// killed. The caller may then safely advance its anchor(s); anything else throws.
     func sync(payload: Data, serverURL: URL, apiKey: String,
               token: String? = nil,
+              transport: Transport = .background,
               timeout: TimeInterval = 300) async throws {
         let uploadToken = token ?? UUID().uuidString
+
+        if transport == .immediate {
+            try await uploadImmediate(
+                payload: payload,
+                serverURL: serverURL,
+                apiKey: apiKey,
+                token: uploadToken,
+                timeout: timeout
+            )
+            return
+        }
 
         // If an earlier background upload of this exact batch completed while the app was
         // suspended or terminated, consume that 2xx acknowledgement and skip re-uploading.
@@ -322,6 +486,62 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
                 "Upload \(uploadToken.prefix(12))… was acknowledged by the server while detached; " +
                 "treating as delivered instead of resending.", level: .info)
         }
+    }
+
+    /// Performs an immediate in-process upload via `ephemeralSession`. Bypasses `nsurlsessiond`
+    /// discretionary deferral so short background windows (`HKObserverQuery`, `BGAppRefreshTask`)
+    /// complete in milliseconds instead of timing out.
+    private func uploadImmediate(
+        payload: Data,
+        serverURL: URL,
+        apiKey: String,
+        token uploadToken: String,
+        timeout: TimeInterval
+    ) async throws {
+        try Task.checkCancellation()
+
+        let (bodyData, isCompressed) = await Task.detached(priority: .utility) { () -> (Data, Bool) in
+            if let compressed = Self.gzip(payload) {
+                return (compressed, true)
+            }
+            DataDonorLogger.shared.log(
+                "Compression failed for a \(payload.count)-byte payload; uploading uncompressed.",
+                level: .warn)
+            return (payload, false)
+        }.value
+
+        try Task.checkCancellation()
+
+        var request = makeRequest(
+            url: serverURL.appendingPathComponent("/api/v1/health-sync/post"),
+            method: "POST",
+            apiKey: apiKey,
+            cachePolicy: .useProtocolCachePolicy
+        )
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if isCompressed {
+            request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
+        }
+        request.timeoutInterval = timeout
+
+        DataDonorLogger.shared.log(
+            "Immediate upload \(uploadToken.prefix(12))… (\(payload.count)B raw, \(bodyData.count)B wire)",
+            level: .debug)
+
+        let (responseData, response) = try await ephemeralSession.upload(for: request, from: bodyData)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SyncError(message: "Upload finished with no HTTP response")
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let detail = String(data: responseData, encoding: .utf8) ?? ""
+            throw SyncError(message: "Server returned status \(httpResponse.statusCode). \(detail)")
+        }
+
+        DataDonorLogger.shared.log(
+            "SyncEngine: Immediate upload \(uploadToken.prefix(12))… completed (Status: \(httpResponse.statusCode))",
+            level: .info)
     }
 
     /// Performs one upload attempt. Background uploads must be file-backed, so the payload
@@ -364,49 +584,48 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
         // surfaces as an error rather than pinning a background-task budget.
         request.timeoutInterval = timeout
 
+        let identity = UploadTaskIdentity(batchToken: uploadToken)
+        defer {
+            withState { _ = cancelledAttempts.remove(identity.attemptId) }
+        }
+
         do {
             try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                    // Bail out before creating the task if we were already cancelled —
-                    // otherwise the upload starts and immediately orphans itself.
-                    if Task.isCancelled {
+                    let task = session.uploadTask(with: request, fromFile: fileURL)
+                    task.taskDescription = identity.taskDescription
+
+                    let registered = registerUploadAttempt(
+                        identity: identity,
+                        fileURL: fileURL,
+                        continuation: continuation,
+                        isTaskCancelled: Task.isCancelled
+                    )
+                    guard registered else {
+                        task.cancel()
                         continuation.resume(throwing: CancellationError())
                         return
                     }
 
-                    let task = session.uploadTask(with: request, fromFile: fileURL)
-                    // The key the delegate will use. Survives relaunch with the task.
-                    task.taskDescription = uploadToken
-
-                    let previousFile = withState { () -> URL? in
-                        pendingUploads[uploadToken] = continuation
-                        return payloadFiles.updateValue(fileURL, forKey: uploadToken)
-                    }
-                    if let previousFile, previousFile != fileURL {
-                        try? FileManager.default.removeItem(at: previousFile)
-                    }
-
                     DataDonorLogger.shared.log(
-                        "Started upload \(uploadToken.prefix(12))… for payload size: \(payload.count) bytes", level: .info)
+                        "Started upload \(uploadToken.prefix(12))… [\(identity.attemptId.prefix(8))] for payload size: \(payload.count) bytes",
+                        level: .info)
                     task.resume()
                 }
             } onCancel: {
-                // Cancellation from BackgroundSyncManager's expiration handler lands here.
-                // Resume the waiter so `sync()` doesn't hang for the rest of the process
-                // lifetime. The upload itself is left running: a background session is
-                // allowed to finish after suspension, and if it lands a 2xx the delegate
-                // records it as an acknowledged orphan and cleans up `payloadFiles`.
-                let continuation = withState { pendingUploads.removeValue(forKey: uploadToken) }
-                continuation?.resume(throwing: CancellationError())
+                // Cancellation from BackgroundSyncManager's expiration handler or user stop.
+                // Resume the waiter so `sync()` doesn't hang. If the task was already started,
+                // it remains running out-of-process under its own `attemptId` and its staging
+                // file stays intact until that specific attempt's `didCompleteWithError` fires.
+                cancelUploadAttempt(attemptId: identity.attemptId)
             }
         } catch {
-            // Only remove `fileURL` here if the URLSessionUploadTask was never created
-            // (i.e., `payloadFiles[uploadToken]` was not registered for this file). Once
-            // `task.resume()` has been called, `urlSession(_:task:didCompleteWithError:)`
-            // owns deleting the file when the background transfer finishes.
+            // Only remove `fileURL` here if the URLSessionUploadTask was never registered
+            // under `payloadFiles[identity.attemptId]`. Once started, `handleUploadCompletion`
+            // owns deleting this attempt's file.
             let wasHandedToSession = withState { () -> Bool in
-                pendingUploads.removeValue(forKey: uploadToken)
-                return payloadFiles[uploadToken] == fileURL
+                pendingUploads.removeValue(forKey: identity.attemptId)
+                return payloadFiles[identity.attemptId] == fileURL
             }
             if !wasHandedToSession {
                 try? FileManager.default.removeItem(at: fileURL)

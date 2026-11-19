@@ -94,7 +94,7 @@ class HealthStoreManager: ObservableObject {
         let readTypes = HealthTypeCatalog.readTypes
 
         healthStore.requestAuthorization(toShare: nil, read: readTypes) { success, error in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 if success {
                     self.isAuthorized = true
                     UserDefaults.standard.set(true, forKey: "hasRequestedHealthAccess")

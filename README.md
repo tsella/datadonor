@@ -65,22 +65,36 @@ Both suites are self-contained and run in CI.
 
 ## Background sync
 
-Three wake paths, fastest first:
+Four wake paths, fastest first:
 
-- HealthKit observers on steps, heart rate, active energy, resting HR, HRV, body mass,
-  sleep and workouts. Each wake syncs the type that changed inside a
-  `beginBackgroundTask`, because the callback's own runtime is a few seconds.
-- `BGAppRefreshTask` (`la.tsel.datadonor.backgroundSync`) for the periodic delta.
-- `BGProcessingTask` (`la.tsel.datadonor.fullSync`) for the full 46-type sweep, which
-  does not fit a refresh window.
+- A multi-type `HKObserverQuery` (`frequency: .immediate`) covering steps, heart rate,
+  active energy, resting HR, HRV, body mass, SpO2, respiratory rate, dietary energy/water,
+  blood glucose, blood pressure, sleep, mindful sessions, menstrual flow, and workouts.
+  Registered synchronously inside `didFinishLaunchingWithOptions`. Because HealthKit delays
+  observer delivery until the phone is unlocked, each wake syncs the changed types first
+  and then opportunistically runs a batched full-catalog sweep if due (30+ min) or if a
+  previous wake was deferred while locked or away from home.
+- `UIApplication.protectedDataDidBecomeAvailableNotification`, which drains any deferred
+  locked-device sync immediately on unlock when the process is still resident.
+- `BGAppRefreshTask` (`la.tsel.datadonor.backgroundSync`, 15-minute floor) for periodic
+  batched delta sweeps.
+- `BGProcessingTask` (`la.tsel.datadonor.fullSync`, 1-hour floor) for full reconciliation
+  sweeps.
+
+Background wakes use an immediate (non-background) `URLSession` so iOS does not force
+uploads into `nsurlsessiond`'s discretionary queue, pack incremental deltas across types
+into single HTTP requests, and pre-flight with a fast network/ping check (falling back to
+the last resolved LAN IP with strict TLS public-key pinning if background mDNS stalls).
+Foreground manual syncs still use `URLSessionConfiguration.background` so large backfills
+keep running if you switch apps.
 
 iOS decides when a background task runs; the `earliestBeginDate` values are floors, not a
 cadence. Observers are process-bound and are registered on every launch, so a force-quit
 stops them until the app is opened again.
 
-The refresh request asks for a five-minute floor. A sync failure alert is sent only after
-three consecutive runs fail, and a clean run clears the count; the streak and the last alert
-time live in `UserDefaults` so they survive the fresh process a background run usually gets.
+A sync failure alert is sent only after three consecutive runs fail, and a clean run clears
+the count; the streak and the last alert time live in `UserDefaults` so they survive the
+fresh process a background run usually gets.
 
 To trigger a task by hand in Xcode, pause the debugger and run:
 

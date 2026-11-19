@@ -196,6 +196,8 @@ struct ContentView: View {
                     serverDiscoveryManager.startDiscovery()
                 case .background:
                     serverDiscoveryManager.stopDiscovery()
+                    BackgroundSyncManager.shared.scheduleAppRefresh()
+                    BackgroundSyncManager.shared.scheduleProcessing()
                 default:
                     break
                 }
@@ -229,16 +231,7 @@ struct ContentView: View {
                 set: { if !$0 { serverDiscoveryManager.pendingApprovalURL = nil } }
             )) {
                 Button("Approve") {
-                    if let url = serverDiscoveryManager.pendingApprovalURL {
-                        // Canonicalizes and de-dupes across casing, so approving `Mac.lan`
-                        // when `mac.lan` is already stored cannot append a second entry.
-                        ServerResolver.approve(url)
-
-                        serverDiscoveryManager.activeServerURL = url
-                        // Make the server reachable from the background task too.
-                        ServerResolver.rememberActive(url)
-                        serverDiscoveryManager.pendingApprovalURL = nil
-                    }
+                    serverDiscoveryManager.approvePendingServer()
                 }
                 Button("Decline", role: .cancel) {
                     serverDiscoveryManager.pendingApprovalURL = nil

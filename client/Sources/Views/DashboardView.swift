@@ -19,6 +19,21 @@ struct ServerStatsResponse: Codable {
     let stats: [ServerStat]
 }
 
+/// Tracks monotonic request generations so an older, slower dashboard fetch cannot
+/// overwrite newer chart data or cache after a refresh supersedes it.
+struct FetchGenerationGuard {
+    private(set) var current: Int = 0
+
+    mutating func beginNext() -> Int {
+        current += 1
+        return current
+    }
+
+    func isCurrent(_ generation: Int) -> Bool {
+        generation == current
+    }
+}
+
 struct DashboardView: View {
     @AppStorage("lastSyncTimestamp") private var storedLastSync: Double = 0.0
     @EnvironmentObject var healthQueryManager: HealthQueryManager
@@ -28,6 +43,7 @@ struct DashboardView: View {
     
     @State private var syncData: [SyncDataPoint]
     @State private var fetchTask: Task<Void, Never>?
+    @State private var fetchGuard = FetchGenerationGuard()
     @State private var lastRefreshCount: Int = 0
 
     private static let cacheKey = "dashboard_cache_months"
@@ -137,7 +153,11 @@ struct DashboardView: View {
         .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
         .task {
             lastRefreshCount = healthQueryManager.totalRecordsSynced
-            await fetchDashboardStats()
+            refreshData()
+        }
+        .onDisappear {
+            fetchTask?.cancel()
+            fetchTask = nil
         }
         .onChange(of: healthQueryManager.totalRecordsSynced) { newTotal in
             guard healthQueryManager.isSyncing else { return }
@@ -173,14 +193,15 @@ struct DashboardView: View {
     
     private func refreshData() {
         fetchTask?.cancel()
+        let generation = fetchGuard.beginNext()
         fetchTask = Task { @MainActor in
             await Task.yield()
-            await fetchDashboardStats()
+            await fetchDashboardStats(generation: generation)
         }
     }
     
     @MainActor
-    private func fetchDashboardStats() async {
+    private func fetchDashboardStats(generation: Int) async {
         let apiKey = ServerResolver.loadApiKey()
         guard !apiKey.isEmpty,
               let serverURL = ServerResolver.resolve(
@@ -195,7 +216,7 @@ struct DashboardView: View {
                 timeScale: "months",
                 deviceId: deviceId
             )
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, fetchGuard.isCurrent(generation) else { return }
             
             if let decoded = try? JSONDecoder().decode(ServerStatsResponse.self, from: data) {
                 UserDefaults.standard.set(data, forKey: Self.cacheKey)

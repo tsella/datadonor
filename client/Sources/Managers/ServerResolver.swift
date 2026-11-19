@@ -112,9 +112,14 @@ enum ServerResolver {
         UserDefaults.standard.set(canonical(url), forKey: "lastActiveServerURL")
     }
 
-    // MARK: - Approved servers
+    // MARK: - Approved servers & cached LAN IPs
 
     private static let approvedKey = "approvedServers"
+    /// Maps canonical approved hostnames (e.g. "mac.lan") to their last resolved IP
+    /// (e.g. "192.168.1.42"). iOS throttles mDNS multicast lookups in background tasks,
+    /// so falling back to the cached IP lets background syncs connect immediately while
+    /// still requiring the approved hostname's pinned TLS public key.
+    private static let cachedHostIPsKey = "cachedServerHostIPs"
 
     /// The canonical string form of a server URL.
     ///
@@ -157,6 +162,75 @@ enum ServerResolver {
         return hosts
     }
 
+    /// Records the resolved IP address for an approved hostname so background syncs can
+    /// fall back to direct IP when iOS throttles mDNS (`.local`/`.lan`) resolution.
+    static func rememberResolvedIP(_ ip: String, for url: URL) {
+        guard let host = url.host else { return }
+        let normalizedHost = canonicalHost(host)
+        let normalizedIP = canonicalHost(ip)
+        guard !normalizedIP.isEmpty, normalizedIP != normalizedHost else { return }
+        var map = UserDefaults.standard.dictionary(forKey: cachedHostIPsKey) as? [String: String] ?? [:]
+        if map[normalizedHost] != normalizedIP {
+            map[normalizedHost] = normalizedIP
+            UserDefaults.standard.set(map, forKey: cachedHostIPsKey)
+        }
+    }
+
+    /// Returns a URL pointing directly to the cached IP for `url`'s host (preserving scheme
+    /// and port), or nil if none is cached or `url` already uses that IP.
+    static func cachedFallbackURL(for url: URL) -> URL? {
+        guard let host = url.host else { return nil }
+        let normalizedHost = canonicalHost(host)
+        let map = UserDefaults.standard.dictionary(forKey: cachedHostIPsKey) as? [String: String] ?? [:]
+        guard let cachedIP = map[normalizedHost], !cachedIP.isEmpty, cachedIP != normalizedHost else {
+            return nil
+        }
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        components.host = cachedIP
+        return components.url
+    }
+
+    /// Resolves a TLS challenge host to the approved logical host whose pin should be checked.
+    /// Returns `(logicalHost, viaCachedIP)` or `nil` if the host is not approved.
+    static func approvedHost(forChallengeHost challengeHost: String) -> (logicalHost: String, viaCachedIP: Bool)? {
+        let target = canonicalHost(challengeHost)
+        let approved = approvedHosts()
+        if approved.contains(target) {
+            return (target, false)
+        }
+        let map = UserDefaults.standard.dictionary(forKey: cachedHostIPsKey) as? [String: String] ?? [:]
+        for (logicalHost, cachedIP) in map where approved.contains(logicalHost) {
+            // URLSession strips brackets from IPv6 hosts in protectionSpace.host.
+            let bareCachedIP = cachedIP.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            if canonicalHost(bareCachedIP) == target {
+                return (logicalHost, true)
+            }
+        }
+        return nil
+    }
+
+    /// True when the host is clearly on a local network (mDNS `.local`/`.lan`, single-label
+    /// hostname, or RFC1918 private IPv4), so pure cellular without VPN cannot reach it.
+    static func isLocalOnlyHost(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased(), !host.isEmpty else { return false }
+        if host.hasSuffix(".local") || host.hasSuffix(".lan") || host.hasSuffix(".home") || !host.contains(".") {
+            return true
+        }
+        // RFC1918 private IPv4 ranges
+        if host.hasPrefix("192.168.") || host.hasPrefix("10.") {
+            return true
+        }
+        if host.hasPrefix("172.") {
+            let parts = host.split(separator: ".")
+            if parts.count == 4, let second = Int(parts[1]), (16...31).contains(second) {
+                return true
+            }
+        }
+        return false
+    }
+
     /// Adds a server to the approved list. Idempotent across casing differences.
     static func approve(_ url: URL) {
         guard !isApproved(url) else { return }
@@ -182,6 +256,11 @@ enum ServerResolver {
             guard let stored = defaults.string(forKey: key),
                   URL(string: stored)?.host.map(canonicalHost) == target else { continue }
             defaults.removeObject(forKey: key)
+        }
+
+        if var map = defaults.dictionary(forKey: cachedHostIPsKey) as? [String: String] {
+            map.removeValue(forKey: target)
+            defaults.set(map, forKey: cachedHostIPsKey)
         }
     }
 }

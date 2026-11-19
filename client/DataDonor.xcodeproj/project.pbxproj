@@ -24,9 +24,20 @@
 		B7F0DB00B82B875BC95F4A74 /* HealthQueryManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDC2BE44061E01864982FC3E /* HealthQueryManager.swift */; };
 		CBFADF0A2575755766133D24 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EEDABAD12BF5B43F630B560A /* Assets.xcassets */; };
 		DC18FB43A4574BBF3EE79E0C /* HealthDataPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43AA60B52B0FE33DA4F10BEE /* HealthDataPayload.swift */; };
+		DD7E57000000000000000001 /* StateMachineRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7E57000000000000000003 /* StateMachineRegressionTests.swift */; };
 		F0228F882331253AC6191A19 /* DataDonorLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = B871FF1D06DC360984B8B117 /* DataDonorLogger.swift */; };
 		F3C2BB7BAAC6F69B8530607E /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 888D8220FCE0DF54E65F5D58 /* NotificationManager.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		DD7E57000000000000000002 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BECACFD0E0DD83A149CCAFFB /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BC76B60E5DCC08F5E7344989;
+			remoteInfo = DataDonor;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		066CF1E26C45529B622C2102 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -47,6 +58,8 @@
 		B871FF1D06DC360984B8B117 /* DataDonorLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataDonorLogger.swift; sourceTree = "<group>"; };
 		DA0502AA9B461C6FB7570609 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		DDC2BE44061E01864982FC3E /* HealthQueryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthQueryManager.swift; sourceTree = "<group>"; };
+		DD7E57000000000000000003 /* StateMachineRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StateMachineRegressionTests.swift; sourceTree = "<group>"; };
+		DD7E57000000000000000004 /* DataDonorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DataDonorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		EEDABAD12BF5B43F630B560A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		F9198FDC42B25ACCE2CD5E18 /* DataDonorApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataDonorApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -56,6 +69,7 @@
 			isa = PBXGroup;
 			children = (
 				8890EB4CCFD0D6FA7698C180 /* DataDonor.app */,
+				DD7E57000000000000000004 /* DataDonorTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -110,10 +124,19 @@
 			path = Models;
 			sourceTree = "<group>";
 		};
+		DD7E57000000000000000005 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				DD7E57000000000000000003 /* StateMachineRegressionTests.swift */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
 		F4CC18334FC78BC359D5B5CF = {
 			isa = PBXGroup;
 			children = (
 				8F0F7ADB27A759B33C1F49F2 /* Sources */,
+				DD7E57000000000000000005 /* Tests */,
 				0CAC18F2757541469B15FF2C /* Products */,
 			);
 			sourceTree = "<group>";
@@ -139,6 +162,24 @@
 			productReference = 8890EB4CCFD0D6FA7698C180 /* DataDonor.app */;
 			productType = "com.apple.product-type.application";
 		};
+		DD7E57000000000000000006 /* DataDonorTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DD7E57000000000000000009 /* Build configuration list for PBXNativeTarget "DataDonorTests" */;
+			buildPhases = (
+				DD7E57000000000000000008 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DD7E57000000000000000007 /* PBXTargetDependency */,
+			);
+			name = DataDonorTests;
+			packageProductDependencies = (
+			);
+			productName = DataDonorTests;
+			productReference = DD7E57000000000000000004 /* DataDonorTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -150,6 +191,10 @@
 				TargetAttributes = {
 					BC76B60E5DCC08F5E7344989 = {
 						DevelopmentTeam = RUD2L7H988;
+					};
+					DD7E57000000000000000006 = {
+						DevelopmentTeam = RUD2L7H988;
+						TestTargetID = BC76B60E5DCC08F5E7344989;
 					};
 				};
 			};
@@ -168,6 +213,7 @@
 			projectRoot = "";
 			targets = (
 				BC76B60E5DCC08F5E7344989 /* DataDonor */,
+				DD7E57000000000000000006 /* DataDonorTests */,
 			);
 		};
 /* End PBXProject section */
@@ -209,7 +255,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DD7E57000000000000000008 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DD7E57000000000000000001 /* StateMachineRegressionTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		DD7E57000000000000000007 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BC76B60E5DCC08F5E7344989 /* DataDonor */;
+			targetProxy = DD7E57000000000000000002 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		D3427A73FFDE3799D6C1E886 /* Release */ = {
@@ -371,6 +433,48 @@
 			};
 			name = Release;
 		};
+		DD7E5700000000000000000A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = la.tsel.DataDonorTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DataDonor.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/DataDonor";
+			};
+			name = Debug;
+		};
+		DD7E5700000000000000000B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = la.tsel.DataDonorTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DataDonor.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/DataDonor";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -388,6 +492,15 @@
 			buildConfigurations = (
 				E32BB700482DA861B91BBACA /* Debug */,
 				F643FDDC86E19C0055A65EF2 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		DD7E57000000000000000009 /* Build configuration list for PBXNativeTarget "DataDonorTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DD7E5700000000000000000A /* Debug */,
+				DD7E5700000000000000000B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

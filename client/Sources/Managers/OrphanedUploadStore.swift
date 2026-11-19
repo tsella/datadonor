@@ -28,24 +28,20 @@ final class OrphanedUploadStore: @unchecked Sendable {
         self.map = defaults.dictionary(forKey: defaultsKey) as? [String: Double] ?? [:]
     }
 
-    private func persist(_ snapshot: [String: Double]) {
-        if Thread.isMainThread {
-            defaults.set(snapshot, forKey: defaultsKey)
-        } else {
-            DispatchQueue.main.async { [defaults, defaultsKey] in
-                defaults.set(snapshot, forKey: defaultsKey)
-            }
-        }
+    /// `UserDefaults` is thread-safe; writing synchronously while holding `lock` guarantees
+    /// that persisted snapshots stay strictly ordered with in-memory mutations (avoiding
+    /// out-of-order `DispatchQueue.main.async` overwrites) and flush before background suspension.
+    private func persistLocked() {
+        defaults.set(map, forKey: defaultsKey)
     }
 
     func recordSuccess(token: String) {
         lock.lock()
+        defer { lock.unlock() }
         let cutoff = Date().timeIntervalSince1970 - staleAfter
         map = map.filter { $0.value >= cutoff }
         map[token] = Date().timeIntervalSince1970
-        let snapshot = map
-        lock.unlock()
-        persist(snapshot)
+        persistLocked()
     }
 
     /// True only when the server confirmed the batch with a 2xx. An interrupted upload may
@@ -60,24 +56,20 @@ final class OrphanedUploadStore: @unchecked Sendable {
     /// Atomically checks whether `token` was acknowledged and removes it if so.
     func consumeAcknowledgement(token: String) -> Bool {
         lock.lock()
+        defer { lock.unlock() }
         guard map.removeValue(forKey: token) != nil else {
-            lock.unlock()
             return false
         }
-        let snapshot = map
-        lock.unlock()
-        persist(snapshot)
+        persistLocked()
         return true
     }
 
     func forget(token: String) {
         lock.lock()
+        defer { lock.unlock() }
         guard map.removeValue(forKey: token) != nil else {
-            lock.unlock()
             return
         }
-        let snapshot = map
-        lock.unlock()
-        persist(snapshot)
+        persistLocked()
     }
 }

@@ -34,9 +34,22 @@ private struct QRScannerControllerRepresentable: UIViewControllerRepresentable {
 }
 
 class ScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
+    enum ScannerState: Equatable {
+        case checkingPermission
+        case ready
+        case running
+        case scanned
+        case unavailable
+    }
+
     var captureSession: AVCaptureSession?
     var previewLayer: AVCaptureVideoPreviewLayer?
     var onResult: ((String) -> Void)?
+    private(set) var scannerState: ScannerState = .checkingPermission
+    private var isViewVisible = false
+    /// Dedicated serial queue for all `AVCaptureSession` start/stop transitions so rapid
+    /// appearance/disappearance or scan teardown never interleaves concurrently.
+    private let sessionQueue = DispatchQueue(label: "la.tsel.datadonor.qrscanner")
     
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -51,26 +64,33 @@ class ScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDel
         case .notDetermined:
             AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
                 DispatchQueue.main.async {
+                    guard let self else { return }
                     if granted {
-                        self?.configureSession()
+                        self.configureSession()
                     } else {
-                        self?.showMessage("Camera access is required to scan your API Key QR code. Enable camera access in Settings.")
+                        self.scannerState = .unavailable
+                        self.showMessage("Camera access is required to scan your API Key QR code. Enable camera access in Settings.")
                     }
                 }
             }
         case .denied, .restricted:
+            scannerState = .unavailable
             showMessage("Camera access is denied. Enable camera access for DataDonor in iOS Settings.")
         @unknown default:
+            scannerState = .unavailable
             showMessage("Camera is unavailable.")
         }
     }
 
     private func configureSession() {
+        guard captureSession == nil, scannerState != .scanned else { return }
+
         let session = AVCaptureSession()
 
         guard let videoCaptureDevice = AVCaptureDevice.default(for: .video),
               let videoInput = try? AVCaptureDeviceInput(device: videoCaptureDevice),
               session.canAddInput(videoInput) else {
+            scannerState = .unavailable
             showMessage("No camera available on this device.")
             return
         }
@@ -78,6 +98,7 @@ class ScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDel
 
         let metadataOutput = AVCaptureMetadataOutput()
         guard session.canAddOutput(metadataOutput) else {
+            scannerState = .unavailable
             showMessage("Could not configure QR code scanner.")
             return
         }
@@ -92,8 +113,11 @@ class ScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDel
 
         captureSession = session
         previewLayer = layer
+        scannerState = .ready
 
-        startSession()
+        if isViewVisible {
+            startSession()
+        }
     }
 
     private func showMessage(_ text: String) {
@@ -112,48 +136,68 @@ class ScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDel
         ])
     }
 
-    /// startRunning()/stopRunning() block, so they must stay off the main thread.
+    /// `startRunning()`/`stopRunning()` block, so all session lifecycle calls are serialized
+    /// on `sessionQueue` rather than a concurrent global queue.
     private func startSession() {
-        guard let session = captureSession, !session.isRunning else { return }
-        DispatchQueue.global(qos: .userInitiated).async {
-            session.startRunning()
+        guard scannerState == .ready, let session = captureSession else { return }
+        scannerState = .running
+        sessionQueue.async {
+            if !session.isRunning {
+                session.startRunning()
+            }
         }
     }
 
-    private func stopSession() {
-        guard let session = captureSession, session.isRunning else { return }
-        DispatchQueue.global(qos: .userInitiated).async {
-            session.stopRunning()
+    private func stopSession(nextState: ScannerState) {
+        if scannerState == .running || scannerState == .ready {
+            scannerState = nextState
+        }
+        guard let session = captureSession else { return }
+        sessionQueue.async {
+            if session.isRunning {
+                session.stopRunning()
+            }
         }
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        isViewVisible = true
         startSession()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        stopSession()
+        isViewVisible = false
+        if scannerState != .scanned {
+            stopSession(nextState: .ready)
+        }
     }
     
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         previewLayer?.frame = view.bounds
     }
+
+    /// Processes a decoded QR payload, guaranteeing single emission across rapid frames.
+    @discardableResult
+    internal func handleScannedCode(_ code: String?) -> Bool {
+        guard scannerState != .scanned,
+              let value = code,
+              !value.isEmpty else {
+            return false
+        }
+        stopSession(nextState: .scanned)
+        scannerState = .scanned
+        AudioServicesPlaySystemSound(SystemSoundID(kSystemSoundID_Vibrate))
+        onResult?(value)
+        return true
+    }
     
     func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
         // Only tear down the session once we have a usable value. Stopping first meant an
         // unreadable code left the preview frozen with no way to retry.
-        guard let readableObject = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
-              let stringValue = readableObject.stringValue,
-              !stringValue.isEmpty else {
-            return
-        }
-
-        stopSession()
-
-        AudioServicesPlaySystemSound(SystemSoundID(kSystemSoundID_Vibrate))
-        onResult?(stringValue)
+        let readableObject = metadataObjects.first as? AVMetadataMachineReadableCodeObject
+        _ = handleScannedCode(readableObject?.stringValue)
     }
 }

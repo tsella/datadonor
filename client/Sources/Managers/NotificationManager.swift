@@ -23,7 +23,16 @@ final class NotificationManager: @unchecked Sendable {
     /// While a streak runs past the threshold, alert at most this often.
     private let alertInterval: TimeInterval = 3600
 
-    private init() {}
+    private let defaults: UserDefaults
+    private let nowProvider: @Sendable () -> Date
+
+    init(
+        defaults: UserDefaults = .standard,
+        now: @escaping @Sendable () -> Date = { Date() }
+    ) {
+        self.defaults = defaults
+        self.nowProvider = now
+    }
 
     func requestAuthorization() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
@@ -39,7 +48,7 @@ final class NotificationManager: @unchecked Sendable {
     /// is sent once at the end of a sync so we don't spam the lock screen.
     func reportSyncFailure(type: String, error: Error) {
         lock.lock()
-        let now = Date()
+        let now = nowProvider()
         let shouldNotify: Bool
         if let last = lastReportedFailure[type], now.timeIntervalSince(last) < throttleInterval {
             shouldNotify = false
@@ -62,13 +71,13 @@ final class NotificationManager: @unchecked Sendable {
         defer { lock.unlock() }
 
         guard failedTypeCount > 0 else {
-            UserDefaults.standard.removeObject(forKey: consecutiveFailuresKey)
-            UserDefaults.standard.removeObject(forKey: lastAlertKey)
+            defaults.removeObject(forKey: consecutiveFailuresKey)
+            defaults.removeObject(forKey: lastAlertKey)
             return false
         }
 
-        let streak = UserDefaults.standard.integer(forKey: consecutiveFailuresKey) + 1
-        UserDefaults.standard.set(streak, forKey: consecutiveFailuresKey)
+        let streak = defaults.integer(forKey: consecutiveFailuresKey) + 1
+        defaults.set(streak, forKey: consecutiveFailuresKey)
 
         guard streak >= failureAlertThreshold else {
             DataDonorLogger.shared.log(
@@ -77,13 +86,19 @@ final class NotificationManager: @unchecked Sendable {
             return false
         }
 
-        let now = Date()
-        if let lastAlert = UserDefaults.standard.object(forKey: lastAlertKey) as? Date,
+        let now = nowProvider()
+        if let lastAlert = defaults.object(forKey: lastAlertKey) as? Date,
            now.timeIntervalSince(lastAlert) < alertInterval {
             return false
         }
-        UserDefaults.standard.set(now, forKey: lastAlertKey)
+        defaults.set(now, forKey: lastAlertKey)
         return true
+    }
+
+    internal var currentFailureStreak: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return defaults.integer(forKey: consecutiveFailuresKey)
     }
 
     func sendSyncErrorNotification(message: String) {

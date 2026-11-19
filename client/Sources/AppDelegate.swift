@@ -31,8 +31,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
         NotificationManager.shared.requestAuthorization()
 
-        // Observer queries don't survive process death, so re-register them each launch
-        // for users who already granted access.
+        // Observer queries don't survive process death and MUST be executed synchronously
+        // before didFinishLaunchingWithOptions returns so HealthKit cold-launch wakes
+        // deliver their updates into the active query.
         if healthStoreManager.isAuthorized {
             BackgroundSyncManager.shared.setupObserverQueries(healthStore: healthStoreManager.healthStore)
         }
@@ -41,17 +42,15 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         return true
     }
 
-    func applicationDidEnterBackground(_ application: UIApplication) {
-        // Keep a pending request alive across suspensions.
-        BackgroundSyncManager.shared.scheduleAppRefresh()
-        BackgroundSyncManager.shared.scheduleProcessing()
-    }
+    // Background task re-scheduling on foreground -> background transitions is handled via
+    // SwiftUI's `scenePhase == .background` in ContentView (UIKit does not deliver
+    // `applicationDidEnterBackground` to `UIApplicationDelegateAdaptor` in scene-based apps).
 
     func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {
         DataDonorLogger.shared.log("AppDelegate: Handling events for background URL session: \(identifier)", level: .info)
 
         if identifier == "la.tsel.datadonor.sync" {
-            syncEngine.backgroundCompletionHandler = completionHandler
+            syncEngine.setBackgroundCompletionHandler(completionHandler)
         } else {
             completionHandler()
         }
