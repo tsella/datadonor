@@ -8,7 +8,16 @@ const sqlite3 = require('sqlite3').verbose();
 const cfg = require('./config');
 
 function open(file) {
-  return new sqlite3.Database(file, sqlite3.OPEN_READONLY);
+  const db = new sqlite3.Database(file, sqlite3.OPEN_READONLY);
+  /* A missing or unreadable file reports SQLITE_CANTOPEN asynchronously. With no
+     'error' listener Node treats that as unhandled and kills the process, so the
+     socket closes with no response and the browser shows "Load failed" instead of
+     the real cause. Keep the handle alive and let the endpoint answer with an
+     error that names the path. */
+  db.on('error', (err) => {
+    console.error(`[db] cannot use ${file}: ${err.message}`);
+  });
+  return db;
 }
 
 function all(db, sql, params = []) {
