@@ -1125,4 +1125,30 @@ final class StateMachineRegressionTests: XCTestCase {
         XCTAssertGreaterThan(SplashWaveformMath.lubDubScale(at: 0.63), 1.02)
         XCTAssertEqual(SplashWaveformMath.lubDubScale(at: 1.3), 1.0, accuracy: 0.001)
     }
+
+    func testServerStatsResponseDecodesArchiveTotalAndLegacyFormat() throws {
+        let modernJSON = Data("""
+        {
+          "stats": [
+            { "date": "2026-09-01", "type": "Heart Rate", "count": 12000 },
+            { "date": "2026-10-01", "type": "Sleep", "count": 450 }
+          ],
+          "total_records": 15000
+        }
+        """.utf8)
+        let modern = try JSONDecoder().decode(ServerStatsResponse.self, from: modernJSON)
+        XCTAssertEqual(modern.stats.count, 2)
+        XCTAssertEqual(modern.totalRecords, 15000)
+
+        let legacyJSON = Data("""
+        {
+          "stats": [
+            { "date": "2026-09-01", "type": "Steps", "count": 3000 }
+          ]
+        }
+        """.utf8)
+        let legacy = try JSONDecoder().decode(ServerStatsResponse.self, from: legacyJSON)
+        XCTAssertEqual(legacy.stats.count, 1)
+        XCTAssertNil(legacy.totalRecords)
+    }
 }

@@ -98,13 +98,15 @@ Receives batches of HealthKit data (optionally `gzip`-compressed).
 ---
 
 ### D. Analytics Summary (`/api/v1/health-sync/stats`)
-Returns aggregated record counts bucketed by category (`Heart Rate`, `Steps`, `Sleep`, `Workouts`) and time grain (`days`, `weeks`, `months`).
+Returns aggregated record counts bucketed by category (`Heart Rate`, `Steps`, `Sleep`, `Workouts`) and time grain (`days`, `weeks`, `months`), along with `total_records` across the requested scope.
 
 * **Method**: `GET`
-* **Path**: `/api/v1/health-sync/stats?timeScale=days|weeks|months`
+* **Path**: `/api/v1/health-sync/stats?timeScale=days|weeks|months&scope=device|all`
+  * `scope=device` *(default)*: aggregates rows matching `X-Device-ID`.
+  * `scope=all`: aggregates the full archive across all devices so a reinstalled or restored iOS client can reconstruct its complete Sync History chart even after `identifierForVendor` changes.
 * **Headers**:
   * `Authorization: Bearer <your_shared_secret>`
-  * `X-Device-ID`: `<UUID of the iOS Device>`
+  * `X-Device-ID`: `<UUID of the iOS Device>` *(required when `scope=device`)*
 
 ## 4. Data Storage Recommendations
 

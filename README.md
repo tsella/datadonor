@@ -10,7 +10,7 @@
   <a href="https://github.com/tsella/datadonor/actions/workflows/ci.yml">
     <img src="https://img.shields.io/github/actions/workflow/status/tsella/datadonor/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI" alt="CI Status" />
   </a>
-  <img src="https://img.shields.io/badge/iOS_App-v1.4-0A9F91?style=flat-square&logo=apple&logoColor=white" alt="iOS App v1.4" />
+  <img src="https://img.shields.io/badge/iOS_App-v1.5-0A9F91?style=flat-square&logo=apple&logoColor=white" alt="iOS App v1.5" />
   <img src="https://img.shields.io/badge/iOS-16.0+-1C1C1E?style=flat-square&logo=ios&logoColor=white" alt="iOS 16.0+" />
   <a href="LICENSE">
     <img src="https://img.shields.io/github/license/tsella/datadonor?style=flat-square&color=4E5C9E" alt="MIT License" />
@@ -63,7 +63,7 @@ It pairs a native **SwiftUI iOS app** with a lightweight **local Fastify + SQLit
 
 ## On-Device Vitals Dashboard
 
-DataDonor isn't just a headless uploader — the iOS client (`v1.4`) ships with a fast, offline-first biometric dashboard powered by **Swift Charts**, **off-MainActor aggregation**, and **device-lock encrypted snapshot caching** (`NSFileProtectionComplete`):
+DataDonor isn't just a headless uploader — the iOS client (`v1.5`) ships with a fast, offline-first biometric dashboard powered by **Swift Charts**, **off-MainActor aggregation**, and **device-lock encrypted snapshot caching** (`NSFileProtectionComplete`):
 
 | Card | What You See |
 | --- | --- |

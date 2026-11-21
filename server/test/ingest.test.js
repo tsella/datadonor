@@ -190,4 +190,32 @@ test('stats buckets are explicit, not guessed from the type name', async () => {
   assert.strictEqual(byDate.get('Heart Rate'), 2, 'HR and SDNN share a bucket');
   assert.strictEqual(byDate.get('Sleep'), 1);
   assert.strictEqual(byDate.has('Other'), false, 'unknown type is dropped, not bucketed');
+  assert.strictEqual(res.json.total_records, 4, 'total_records includes all stored types');
+});
+
+test('scope=all reconstructs full archive history for a restored or reinstalled device', async () => {
+  // Simulate a reinstalled iPhone with a fresh X-Device-ID that has zero rows of its own.
+  const deviceOnly = await srv.call('/api/v1/health-sync/stats?timeScale=months', {
+    headers: { 'X-Device-ID': 'device-reinstalled' },
+  });
+  assert.strictEqual(deviceOnly.status, 200);
+  assert.strictEqual(deviceOnly.json.stats.length, 0);
+  assert.strictEqual(deviceOnly.json.total_records, 0);
+
+  const restored = await srv.call('/api/v1/health-sync/stats?timeScale=months&scope=all', {
+    headers: { 'X-Device-ID': 'device-reinstalled' },
+  });
+  assert.strictEqual(restored.status, 200);
+  assert.ok(restored.json.stats.length > 0, 'reconstructs historical monthly buckets');
+  // Prior tests inserted: device-a (5), device-b (5), device-d (1 inserted - 1 deleted = 0), device-stats (4) => 14
+  assert.strictEqual(restored.json.total_records, 14);
+
+  const restoredDays = await srv.call('/api/v1/health-sync/stats?timeScale=days&scope=all');
+  assert.strictEqual(restoredDays.status, 200);
+  assert.strictEqual(restoredDays.json.total_records, 14);
+
+  const invalidScope = await srv.call('/api/v1/health-sync/stats?timeScale=months&scope=bogus', {
+    headers: { 'X-Device-ID': 'device-reinstalled' },
+  });
+  assert.strictEqual(invalidScope.status, 400);
 });

@@ -442,20 +442,39 @@ async function ingestPayload({ device_id, data, anchors, deleted_uuids }) {
 
 // Endpoint: D. Analytics Stats
 fastify.get('/api/v1/health-sync/stats', async (request, reply) => {
+    const scope = request.query.scope || 'device';
+    if (scope !== 'device' && scope !== 'all') {
+        return reply.status(400).send({ error: 'Invalid scope' });
+    }
+
     const deviceId = request.headers['x-device-id'];
-    if (!deviceId) return reply.status(400).send({ error: 'Missing X-Device-ID header' });
+    if (scope === 'device' && !deviceId) {
+        return reply.status(400).send({ error: 'Missing X-Device-ID header' });
+    }
 
     const timeScale = request.query.timeScale || 'days';
     const db = await getDb();
-    
+
+    const whereClause = scope === 'all'
+        ? 'record_count > 0'
+        : 'device_id = ? AND record_count > 0';
+    const params = scope === 'all' ? [] : [deviceId];
+
     let query = '';
-    
+
     if (timeScale === 'days') {
-        // (device_id, date_bucket, data_type) is already the primary key of daily_sync_stats,
-        // so rows are already unique and ordered by date_bucket without a GROUP BY.
-        query = `SELECT date_bucket as date, data_type, record_count as count 
-                 FROM daily_sync_stats
-                 WHERE device_id = ? AND record_count > 0`;
+        if (scope === 'all') {
+            query = `SELECT date_bucket as date, data_type, SUM(record_count) as count
+                     FROM daily_sync_stats
+                     WHERE record_count > 0
+                     GROUP BY date_bucket, data_type`;
+        } else {
+            // (device_id, date_bucket, data_type) is already the primary key of daily_sync_stats,
+            // so rows are already unique and ordered by date_bucket without a GROUP BY.
+            query = `SELECT date_bucket as date, data_type, record_count as count
+                     FROM daily_sync_stats
+                     WHERE device_id = ? AND record_count > 0`;
+        }
     } else if (timeScale === 'weeks') {
         // Snap back to the Monday starting each week. The previous
         // `date(x,'weekday 1','-7 days')` was off by one: 'weekday 1' is a no-op on a
@@ -464,36 +483,41 @@ fastify.get('/api/v1/health-sync/stats', async (request, reply) => {
         const weekStart = `date(date_bucket, '-' || ((strftime('%w', date_bucket) + 6) % 7) || ' days')`;
         query = `SELECT ${weekStart} as date, data_type, SUM(record_count) as count
                  FROM daily_sync_stats
-                 WHERE device_id = ? AND record_count > 0
+                 WHERE ${whereClause}
                  GROUP BY ${weekStart}, data_type`;
     } else if (timeScale === 'months') {
-        query = `SELECT date(date_bucket, 'start of month') as date, data_type, SUM(record_count) as count 
+        query = `SELECT date(date_bucket, 'start of month') as date, data_type, SUM(record_count) as count
                  FROM daily_sync_stats
-                 WHERE device_id = ? AND record_count > 0
+                 WHERE ${whereClause}
                  GROUP BY date(date_bucket, 'start of month'), data_type`;
     } else {
         return reply.status(400).send({ error: 'Invalid timeScale' });
     }
 
     try {
-        const rows = await db.all(query, deviceId);
-        
+        const rows = await db.all(query, ...params);
+
         // Map raw identifiers to UI Buckets
         const mapTypeToBucket = (type) => bucketForType(type);
 
         const aggregated = {};
+        let totalRecords = 0;
         for (const row of rows) {
+            totalRecords += row.count || 0;
             const bucket = mapTypeToBucket(row.data_type);
             if (bucket === 'Other' || !row.count) continue;
-            
+
             const key = `${row.date}_${bucket}`;
             if (!aggregated[key]) {
                 aggregated[key] = { date: row.date, type: bucket, count: 0 };
             }
             aggregated[key].count += row.count;
         }
-        
-        return { stats: Object.values(aggregated).sort((a, b) => a.date.localeCompare(b.date)) };
+
+        return {
+            stats: Object.values(aggregated).sort((a, b) => a.date.localeCompare(b.date)),
+            total_records: totalRecords,
+        };
     } catch (err) {
         logger.error(`Failed to fetch stats: ${err.message}`);
         return reply.status(500).send({ error: 'Failed to fetch stats' });

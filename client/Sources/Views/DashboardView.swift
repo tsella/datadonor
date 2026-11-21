@@ -18,6 +18,12 @@ struct ServerStat: Codable, Sendable {
 
 struct ServerStatsResponse: Codable, Sendable {
     let stats: [ServerStat]
+    let totalRecords: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case stats
+        case totalRecords = "total_records"
+    }
 }
 
 /// Precomputed lookup tables for `DashboardView` so 60–120Hz drag scrubbing performs O(log N)
@@ -87,6 +93,7 @@ struct SyncHistoryIndex: Equatable, Sendable {
 }
 
 struct DashboardView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("lastSyncTimestamp") private var storedLastSync: Double = 0.0
     @AppStorage("cardCollapsed_syncHistory") private var isCollapsed = false
     @EnvironmentObject var healthQueryManager: HealthQueryManager
@@ -96,6 +103,7 @@ struct DashboardView: View {
 
     @State private var syncData: [SyncDataPoint]
     @State private var index: SyncHistoryIndex
+    @State private var serverTotalRecords: Int
     @State private var selectedMonth: Date?
     @State private var selectedCategory: String?
     @State private var fetchTask: Task<Void, Never>?
@@ -118,9 +126,12 @@ struct DashboardView: View {
             let points = Self.buildPoints(from: response.stats)
             _syncData = State(initialValue: points)
             _index = State(initialValue: SyncHistoryIndex.build(from: points, selectedCategory: nil))
+            let cachedTotal = response.totalRecords ?? points.reduce(0) { $0 + $1.count }
+            _serverTotalRecords = State(initialValue: cachedTotal)
         } else {
             _syncData = State(initialValue: [])
             _index = State(initialValue: .empty)
+            _serverTotalRecords = State(initialValue: 0)
         }
     }
 
@@ -146,7 +157,7 @@ struct DashboardView: View {
                 }
             }
         } headerTrailing: {
-            Text(Self.formatCount(selectedMonth.map(index.total(for:)) ?? healthQueryManager.totalRecordsSynced))
+            Text(Self.formatCount(selectedMonth.map(index.total(for:)) ?? max(healthQueryManager.totalRecordsSynced, serverTotalRecords)))
                 .font(.system(.title3, design: .rounded).weight(.bold))
                 .foregroundColor(AppTheme.Colors.teal)
                 .monospacedDigit()
@@ -174,6 +185,17 @@ struct DashboardView: View {
         .task {
             lastRefreshCount = healthQueryManager.totalRecordsSynced
             refreshData()
+        }
+        .onAppear {
+            refreshData()
+        }
+        .onChange(of: customServerURL) { _ in
+            refreshData()
+        }
+        .onChange(of: scenePhase) { newPhase in
+            if newPhase == .active {
+                refreshData()
+            }
         }
         .onChange(of: healthQueryManager.totalRecordsSynced) { newTotal in
             guard healthQueryManager.isSyncing else { return }
@@ -208,6 +230,10 @@ struct DashboardView: View {
                     .foregroundColor(.secondary)
             } else if storedLastSync > 0 {
                 Text("Last synced \(Date(timeIntervalSince1970: storedLastSync).formatted(date: .omitted, time: .shortened)) · auto-sync on")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else if !syncData.isEmpty {
+                Text("Restored from server · auto-sync on")
                     .font(.caption)
                     .foregroundColor(.secondary)
             } else {
@@ -368,25 +394,35 @@ struct DashboardView: View {
                 serverURL: serverURL,
                 apiKey: apiKey,
                 timeScale: "months",
-                deviceId: deviceId
+                deviceId: deviceId,
+                scope: "all"
             )
             guard !Task.isCancelled, fetchGuard.isCurrent(generation) else { return }
 
             let activeCategory = selectedCategory
-            let decoded: ([SyncDataPoint], SyncHistoryIndex)? = await Task.detached(priority: .utility) {
+            let decoded: ([SyncDataPoint], SyncHistoryIndex, Int?)? = await Task.detached(priority: .utility) {
                 guard let response = try? JSONDecoder().decode(ServerStatsResponse.self, from: data) else {
                     return nil
                 }
                 let points = Self.buildPoints(from: response.stats)
                 let builtIndex = SyncHistoryIndex.build(from: points, selectedCategory: activeCategory)
-                return (points, builtIndex)
+                return (points, builtIndex, response.totalRecords)
             }.value
 
-            guard !Task.isCancelled, fetchGuard.isCurrent(generation), let (newPoints, newIndex) = decoded else {
+            guard !Task.isCancelled, fetchGuard.isCurrent(generation),
+                  let (newPoints, newIndex, reportedTotal) = decoded else {
                 return
             }
+
+            // Guard against an older server (pre-`scope=all`, omitting `total_records`) wiping
+            // a valid cached chart when a reinstalled device reconnects with a new `device_id`.
+            if newPoints.isEmpty && reportedTotal == nil && !syncData.isEmpty {
+                return
+            }
+
+            let resolvedTotal = reportedTotal ?? newPoints.reduce(0) { $0 + $1.count }
             UserDefaults.standard.set(data, forKey: Self.cacheKey)
-            applyUpdatedData(points: newPoints, index: newIndex, animated: true)
+            applyUpdatedData(points: newPoints, index: newIndex, serverTotal: resolvedTotal, animated: true)
         } catch {
             if !(error is CancellationError) {
                 print("Dashboard fetch failed: \(error)")
@@ -411,8 +447,13 @@ struct DashboardView: View {
     }
 
     @MainActor
-    private func applyUpdatedData(points: [SyncDataPoint], index newIndex: SyncHistoryIndex, animated: Bool) {
-        guard points != syncData else { return }
+    private func applyUpdatedData(
+        points: [SyncDataPoint],
+        index newIndex: SyncHistoryIndex,
+        serverTotal: Int,
+        animated: Bool
+    ) {
+        guard points != syncData || serverTotal != serverTotalRecords else { return }
         // Rebuild index if selectedCategory changed while decoding off-actor.
         let finalIndex = (selectedCategory == nil && newIndex.visiblePoints.count == points.count)
             ? newIndex
@@ -422,10 +463,12 @@ struct DashboardView: View {
             withAnimation(AppTheme.Animations.chartUpdate) {
                 syncData = points
                 index = finalIndex
+                serverTotalRecords = serverTotal
             }
         } else {
             syncData = points
             index = finalIndex
+            serverTotalRecords = serverTotal
         }
     }
 }

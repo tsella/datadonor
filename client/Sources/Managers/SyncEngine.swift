@@ -634,11 +634,20 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
         }
     }
 
-    func fetchStats(serverURL: URL, apiKey: String, timeScale: String, deviceId: String) async throws -> Data {
+    func fetchStats(
+        serverURL: URL,
+        apiKey: String,
+        timeScale: String,
+        deviceId: String,
+        scope: String = "all"
+    ) async throws -> Data {
         guard var components = URLComponents(url: serverURL.appendingPathComponent("/api/v1/health-sync/stats"), resolvingAgainstBaseURL: false) else {
             throw URLError(.badURL)
         }
-        components.queryItems = [URLQueryItem(name: "timeScale", value: timeScale)]
+        components.queryItems = [
+            URLQueryItem(name: "timeScale", value: timeScale),
+            URLQueryItem(name: "scope", value: scope)
+        ]
         guard let url = components.url else { throw URLError(.badURL) }
 
         let request = makeRequest(url: url, method: "GET", apiKey: apiKey, deviceId: deviceId)
