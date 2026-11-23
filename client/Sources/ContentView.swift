@@ -1,5 +1,59 @@
 import SwiftUI
 
+/// Verified server connection status displayed on the front page.
+///
+/// Never reports `.connected` solely from a cached URL in `UserDefaults`: requires a non-empty
+/// API key and a live `200 OK` from `/api/v1/ping`.
+enum ServerConnectionStatus: Equatable, Sendable {
+    case invalidURL
+    case discovering
+    case missingApiKey(URL)
+    case checking(URL)
+    case connected(URL)
+    case unauthorized(URL)
+    case unreachable(URL, String)
+
+    /// Resolves states that can be determined synchronously before making a network call.
+    static func preliminary(
+        overrideRaw: String,
+        discovered: URL?,
+        apiKey: String
+    ) -> (status: ServerConnectionStatus?, urlToProbe: URL?) {
+        guard let resolved = ServerResolver.resolve(override: overrideRaw, discovered: discovered) else {
+            let status: ServerConnectionStatus = ServerResolver.overrideIsInvalid(overrideRaw)
+                ? .invalidURL
+                : .discovering
+            return (status, nil)
+        }
+        if apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return (.missingApiKey(resolved), nil)
+        }
+        return (nil, resolved)
+    }
+
+    static func from(pingResult: SyncEngine.PingResult, url: URL) -> ServerConnectionStatus {
+        switch pingResult {
+        case .ok:
+            return .connected(url)
+        case .unauthorized:
+            return .unauthorized(url)
+        case .serverError(let code):
+            return .unreachable(url, "Server returned HTTP \(code).")
+        case .unreachable(let reason):
+            return .unreachable(url, reason)
+        }
+    }
+
+    var canInitiateSync: Bool {
+        switch self {
+        case .connected, .checking, .unreachable:
+            return true
+        case .invalidURL, .discovering, .missingApiKey, .unauthorized:
+            return false
+        }
+    }
+}
+
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject var healthStoreManager: HealthStoreManager
@@ -11,6 +65,9 @@ struct ContentView: View {
 
     @StateObject private var vitalsStore = HealthVitalsStore()
     @State private var showSplash = true
+    @State private var connectionStatus: ServerConnectionStatus = .discovering
+    @State private var connectionCheckTask: Task<Void, Never>?
+    @State private var connectionCheckGuard = FetchGenerationGuard()
 
     var body: some View {
         ZStack {
@@ -58,9 +115,14 @@ struct ContentView: View {
                     healthStore: healthStoreManager.healthStore,
                     isAuthorized: healthStoreManager.isAuthorized
                 )
+                refreshConnectionStatus()
             }
             .onAppear {
                 serverDiscoveryManager.startDiscovery()
+                refreshConnectionStatus()
+            }
+            .onChange(of: customServerURL) { _ in
+                refreshConnectionStatus()
             }
             .onChange(of: scenePhase) { newPhase in
                 switch newPhase {
@@ -70,9 +132,12 @@ struct ContentView: View {
                         healthStore: healthStoreManager.healthStore,
                         isAuthorized: healthStoreManager.isAuthorized
                     )
+                    refreshConnectionStatus()
                 case .background:
                     serverDiscoveryManager.stopDiscovery()
                     vitalsStore.cancel()
+                    connectionCheckTask?.cancel()
+                    connectionCheckTask = nil
                     BackgroundSyncManager.shared.scheduleAppRefresh()
                     BackgroundSyncManager.shared.scheduleProcessing()
                 default:
@@ -88,6 +153,7 @@ struct ContentView: View {
                 }
             }
             .onChange(of: serverDiscoveryManager.activeServerURL) { newURL in
+                refreshConnectionStatus()
                 let currentKey = ServerResolver.loadApiKey()
                 guard newURL != nil, !healthQueryManager.isSyncing, healthStoreManager.isAuthorized,
                       !currentKey.isEmpty else { return }
@@ -105,6 +171,7 @@ struct ContentView: View {
                         healthStore: healthStoreManager.healthStore,
                         isAuthorized: healthStoreManager.isAuthorized
                     )
+                    refreshConnectionStatus()
                 }
                 // Defer out of SwiftUI's CoreAnimation commit handler phase so UIKit's
                 // idle-timer transaction doesn't trigger CA::Transaction::add_commit_handler errors.
@@ -192,7 +259,7 @@ struct ContentView: View {
             override: customServerURL,
             discovered: serverDiscoveryManager.activeServerURL
         )
-        let isDisabled = isAuthorized && !isSyncing && resolvedURL == nil
+        let isDisabled = isAuthorized && !isSyncing && (resolvedURL == nil || !connectionStatus.canInitiateSync)
 
         let iconName: String
         let fillColor: Color
@@ -208,7 +275,14 @@ struct ContentView: View {
         } else {
             iconName = "arrow.triangle.2.circlepath"
             fillColor = AppTheme.Colors.teal
-            label = isDisabled ? "Sync unavailable (no server connected)" : "Sync Now"
+            switch connectionStatus {
+            case .missingApiKey:
+                label = "Sync unavailable (API key required)"
+            case .unauthorized:
+                label = "Sync unavailable (invalid API key)"
+            default:
+                label = isDisabled ? "Sync unavailable (no server connected)" : "Sync Now"
+            }
         }
 
         return Button {
@@ -218,6 +292,10 @@ struct ContentView: View {
                 healthQueryManager.cancelSync()
             } else if let serverURL = resolvedURL {
                 let currentKey = ServerResolver.loadApiKey()
+                guard !currentKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    refreshConnectionStatus()
+                    return
+                }
                 Task {
                     await healthQueryManager.performSync(
                         syncEngine: syncEngine,
@@ -244,29 +322,41 @@ struct ContentView: View {
 
     @ViewBuilder
     private var serverConnectionCard: some View {
-        let resolvedURL = ServerResolver.resolve(
-            override: customServerURL,
-            discovered: serverDiscoveryManager.activeServerURL
-        )
-
         CollapsibleCard(
             isCollapsed: $isServerCardCollapsed,
             accessibilityTitle: "Server Connection",
             contentSpacing: 10
         ) {
-            if resolvedURL != nil {
+            switch connectionStatus {
+            case .connected:
                 Text("Connected to Server")
                     .font(.system(.headline, design: .rounded))
                     .foregroundColor(.primary)
-            } else if ServerResolver.overrideIsInvalid(customServerURL) {
+            case .checking:
                 HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(AppTheme.Colors.warning)
-                    Text("Invalid Server URL")
+                    ProgressView()
+                        .tint(.secondary)
+                    Text("Connecting to Server...")
                         .font(.system(.headline, design: .rounded))
-                        .foregroundColor(.primary)
+                        .foregroundColor(.secondary)
                 }
-            } else {
+            case .missingApiKey:
+                Text("API Key Required")
+                    .font(.system(.headline, design: .rounded))
+                    .foregroundColor(.primary)
+            case .unauthorized:
+                Text("Authentication Failed")
+                    .font(.system(.headline, design: .rounded))
+                    .foregroundColor(.primary)
+            case .unreachable:
+                Text("Server Unreachable")
+                    .font(.system(.headline, design: .rounded))
+                    .foregroundColor(.primary)
+            case .invalidURL:
+                Text("Invalid Server URL")
+                    .font(.system(.headline, design: .rounded))
+                    .foregroundColor(.primary)
+            case .discovering:
                 HStack(spacing: 8) {
                     ProgressView()
                         .tint(.secondary)
@@ -276,32 +366,144 @@ struct ContentView: View {
                 }
             }
         } headerTrailing: {
-            if resolvedURL != nil {
+            switch connectionStatus {
+            case .connected:
                 Image(systemName: "checkmark.circle.fill")
                     .font(.title3)
                     .foregroundColor(AppTheme.Colors.teal)
                     .padding(.top, 2)
+            case .missingApiKey:
+                Image(systemName: "key.fill")
+                    .font(.title3)
+                    .foregroundColor(AppTheme.Colors.warning)
+                    .padding(.top, 2)
+            case .unauthorized:
+                Image(systemName: "xmark.octagon.fill")
+                    .font(.title3)
+                    .foregroundColor(AppTheme.Colors.destructive)
+                    .padding(.top, 2)
+            case .unreachable:
+                Image(systemName: "wifi.exclamationmark")
+                    .font(.title3)
+                    .foregroundColor(AppTheme.Colors.warning)
+                    .padding(.top, 2)
+            case .invalidURL:
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.title3)
+                    .foregroundColor(AppTheme.Colors.warning)
+                    .padding(.top, 2)
+            case .checking, .discovering:
+                EmptyView()
             }
         } content: {
-            if let url = resolvedURL {
-                if let host = url.host, let port = url.port {
-                    Text("\(host):\(String(port))")
+            switch connectionStatus {
+            case .connected(let url), .checking(let url):
+                Text(Self.formatServerAddress(url))
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            case .missingApiKey(let url):
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("\(Self.formatServerAddress(url)) · Set or scan your API key in Settings to connect and sync.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                } else {
-                    Text(url.absoluteString)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                    serverCardSettingsLink
                 }
-            } else if ServerResolver.overrideIsInvalid(customServerURL) {
+            case .unauthorized(let url):
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("\(Self.formatServerAddress(url)) · Server rejected the API key. Update it in Settings.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    HStack(spacing: 10) {
+                        serverCardSettingsLink
+                        serverCardRetryButton
+                    }
+                }
+            case .unreachable(let url, let reason):
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("\(Self.formatServerAddress(url)) · \(reason)")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .lineLimit(3)
+                    serverCardRetryButton
+                }
+            case .invalidURL:
                 Text("Include a scheme, e.g. https://192.168.1.5:8443")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
-            } else {
+            case .discovering:
                 Text("Searching local network for _datadonor._tcp")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
+        }
+    }
+
+    private var serverCardSettingsLink: some View {
+        NavigationLink(destination: SettingsView()) {
+            Label("Open Settings", systemImage: "gearshape.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(AppTheme.Colors.teal)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule()
+                        .fill(AppTheme.Colors.teal.opacity(0.12))
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var serverCardRetryButton: some View {
+        Button {
+            refreshConnectionStatus()
+        } label: {
+            Label("Retry", systemImage: "arrow.clockwise")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule()
+                        .fill(AppTheme.Colors.insetSurface)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private static func formatServerAddress(_ url: URL) -> String {
+        if let host = url.host, let port = url.port {
+            return "\(host):\(String(port))"
+        }
+        return url.absoluteString
+    }
+
+    private func refreshConnectionStatus() {
+        connectionCheckTask?.cancel()
+        let generation = connectionCheckGuard.beginNext()
+        let apiKey = ServerResolver.loadApiKey()
+        let preliminary = ServerConnectionStatus.preliminary(
+            overrideRaw: customServerURL,
+            discovered: serverDiscoveryManager.activeServerURL,
+            apiKey: apiKey
+        )
+
+        if let immediate = preliminary.status {
+            connectionStatus = immediate
+            return
+        }
+        guard let urlToProbe = preliminary.urlToProbe else { return }
+
+        // Keep showing `.connected` while silently re-verifying the same URL so foreground
+        // returns don't flicker a spinner.
+        if connectionStatus != .connected(urlToProbe) {
+            connectionStatus = .checking(urlToProbe)
+        }
+
+        let engine = syncEngine
+        connectionCheckTask = Task { @MainActor in
+            let result = await engine.checkConnection(url: urlToProbe, apiKey: apiKey)
+            guard !Task.isCancelled, connectionCheckGuard.isCurrent(generation) else { return }
+            connectionStatus = ServerConnectionStatus.from(pingResult: result, url: urlToProbe)
         }
     }
 

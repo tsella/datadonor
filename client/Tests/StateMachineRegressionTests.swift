@@ -1151,4 +1151,50 @@ final class StateMachineRegressionTests: XCTestCase {
         XCTAssertEqual(legacy.stats.count, 1)
         XCTAssertNil(legacy.totalRecords)
     }
+
+    @MainActor
+    func testServerConnectionStatusRequiresApiKeyAndVerifiedPing() async {
+        let serverURL = URL(string: "https://mac.lan:8443")!
+
+        // Saved customServerURL in local storage WITHOUT an API key must never report connected.
+        let noKey = ServerConnectionStatus.preliminary(
+            overrideRaw: serverURL.absoluteString,
+            discovered: nil,
+            apiKey: "   "
+        )
+        XCTAssertEqual(noKey.status, .missingApiKey(serverURL))
+        XCTAssertNil(noKey.urlToProbe)
+        XCTAssertFalse(noKey.status!.canInitiateSync)
+
+        // With an API key present, preliminary yields urlToProbe so the UI verifies via /ping.
+        let withKey = ServerConnectionStatus.preliminary(
+            overrideRaw: serverURL.absoluteString,
+            discovered: nil,
+            apiKey: "secret-key"
+        )
+        XCTAssertNil(withKey.status)
+        XCTAssertEqual(withKey.urlToProbe, serverURL)
+
+        // Ping results map to exact states and sync gating.
+        let connected = ServerConnectionStatus.from(pingResult: .ok, url: serverURL)
+        XCTAssertEqual(connected, .connected(serverURL))
+        XCTAssertTrue(connected.canInitiateSync)
+
+        let rejected = ServerConnectionStatus.from(pingResult: .unauthorized, url: serverURL)
+        XCTAssertEqual(rejected, .unauthorized(serverURL))
+        XCTAssertFalse(rejected.canInitiateSync)
+
+        let offline = ServerConnectionStatus.from(pingResult: .unreachable("Timed out"), url: serverURL)
+        XCTAssertEqual(offline, .unreachable(serverURL, "Timed out"))
+        XCTAssertTrue(offline.canInitiateSync)
+
+        // performSync must skip cleanly without hitting HealthKit or uploading when apiKey is empty.
+        let suiteName = "test-empty-key-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let manager = HealthQueryManager(defaults: defaults)
+        let engine = SyncEngine(sessionIdentifier: "test-empty-key", createBackgroundSession: false)
+        let outcome = await manager.performSync(syncEngine: engine, serverURL: serverURL, apiKey: "")
+        XCTAssertEqual(outcome, .skipped)
+    }
 }

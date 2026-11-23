@@ -775,6 +775,11 @@ final class HealthQueryManager: ObservableObject {
             DataDonorLogger.shared.log("Skipping sync: No server URL resolved.", level: .warn)
             return .skipped
         }
+
+        guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            DataDonorLogger.shared.log("Skipping sync: No API key configured.", level: .warn)
+            return .skipped
+        }
         
         // Guard against overlapping runs: discovery, the manual button and the background
         // task can all fire performSync, and concurrent runs corrupt the shared anchors.

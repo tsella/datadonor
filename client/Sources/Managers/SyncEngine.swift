@@ -365,6 +365,13 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
         return nil
     }
 
+    enum PingResult: Equatable, Sendable {
+        case ok
+        case unauthorized
+        case serverError(Int)
+        case unreachable(String)
+    }
+
     func ping(url: URL, apiKey: String, timeout: TimeInterval = 5) async throws -> Bool {
         var request = makeRequest(
             url: url.appendingPathComponent("/api/v1/ping"), method: "GET", apiKey: apiKey)
@@ -375,6 +382,34 @@ class SyncEngine: NSObject, URLSessionDelegate, ObservableObject, URLSessionTask
             return true
         }
         return false
+    }
+
+    /// Probes `/api/v1/ping` and distinguishes authentication rejection (401/403) from
+    /// network/TLS failures so the UI never displays "Connected" without a valid API key.
+    func checkConnection(url: URL, apiKey: String, timeout: TimeInterval = 5) async -> PingResult {
+        guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .unauthorized
+        }
+        var request = makeRequest(
+            url: url.appendingPathComponent("/api/v1/ping"), method: "GET", apiKey: apiKey)
+        request.timeoutInterval = timeout
+
+        do {
+            let (_, response) = try await ephemeralSession.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return .unreachable("Invalid response from server.")
+            }
+            switch httpResponse.statusCode {
+            case 200:
+                return .ok
+            case 401, 403:
+                return .unauthorized
+            default:
+                return .serverError(httpResponse.statusCode)
+            }
+        } catch {
+            return .unreachable(error.localizedDescription)
+        }
     }
 
     /// gzip-compresses `data` using zlib's deflate with a gzip wrapper (windowBits 15+16).
