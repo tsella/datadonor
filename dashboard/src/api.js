@@ -74,16 +74,22 @@ async function meta() {
   };
 }
 
-async function rangeDay(query) {
-  const ctx = await series.context();
+async function rangeDay(query, opts = {}) {
+  const now = opts.now || new Date();
+  const ctx = await series.context(now);
   const r = resolveRange(query, ctx.today);
   if (r.error) return { status: 400, body: { error: r.error } };
-  const range = await series.cachedBuildRange(r.from, r.to);
+  const range = await series.cachedBuildRange(r.from, r.to, {
+    bypassCache: Boolean(opts.fresh),
+    now,
+    ctx,
+  });
   return { status: 200, body: range };
 }
 
-async function rangeSeries(query) {
-  const ctx = await series.context();
+async function rangeSeries(query, opts = {}) {
+  const now = opts.now || new Date();
+  const ctx = await series.context(now);
   const r = resolveRange(query, ctx.today);
   if (r.error) return { status: 400, body: { error: r.error } };
   const keys = parseMetricList(query.get('metric'));
@@ -97,7 +103,11 @@ async function rangeSeries(query) {
   if (keys.length > 12) {
     return { status: 400, body: { error: `too many metrics: ${keys.length} (max 12)` } };
   }
-  const range = await series.cachedBuildRange(r.from, r.to);
+  const range = await series.cachedBuildRange(r.from, r.to, {
+    bypassCache: Boolean(opts.fresh),
+    now,
+    ctx,
+  });
   const out = series.series(range, keys, grain);
   if (out.errors.length) return { status: 400, body: { error: out.errors.join('; ') } };
   return {
@@ -113,11 +123,16 @@ async function rangeSeries(query) {
   };
 }
 
-async function rangeSummary(query) {
-  const ctx = await series.context();
+async function rangeSummary(query, opts = {}) {
+  const now = opts.now || new Date();
+  const ctx = await series.context(now);
   const r = resolveRange(query, ctx.today);
   if (r.error) return { status: 400, body: { error: r.error } };
-  const range = await series.cachedBuildRange(r.from, r.to);
+  const range = await series.cachedBuildRange(r.from, r.to, {
+    bypassCache: Boolean(opts.fresh),
+    now,
+    ctx,
+  });
   return {
     status: 200,
     body: {
@@ -132,9 +147,9 @@ const ROUTES = [
   /* Every handler returns {status, body} — meta included. Returning the payload
      bare made `send()` read `.status` off the data and crash on the first call. */
   { path: '/api/meta', handler: async () => ({ status: 200, body: await meta() }) },
-  { path: '/api/range', handler: (q) => rangeDay(q) },
-  { path: '/api/series', handler: (q) => rangeSeries(q) },
-  { path: '/api/summary', handler: (q) => rangeSummary(q) },
+  { path: '/api/range', handler: (q, opts) => rangeDay(q, opts) },
+  { path: '/api/series', handler: (q, opts) => rangeSeries(q, opts) },
+  { path: '/api/summary', handler: (q, opts) => rangeSummary(q, opts) },
 ];
 
 /**
@@ -156,14 +171,25 @@ async function handle(req, res, url) {
 
   let result;
   try {
-    result = await route.handler(url.searchParams);
+    result = await route.handler(url.searchParams, { fresh });
   } catch (err) {
     result = {
       status: 500,
       body: { error: 'query failed', detail: String(err && err.message ? err.message : err) },
     };
   }
-  if (!fresh) cache.set({ url: url.pathname + url.search }, result);
+  const ok2xx = result && result.status >= 200 && result.status < 300;
+  if (ok2xx) {
+    if (fresh) {
+      const baseParams = new URLSearchParams(url.searchParams);
+      baseParams.delete('fresh');
+      const qs = baseParams.toString();
+      const baseUrl = qs ? `${url.pathname}?${qs}` : url.pathname;
+      cache.set({ url: baseUrl }, result);
+    } else {
+      cache.set({ url: url.pathname + url.search }, result);
+    }
+  }
   send(res, result.status, result.body, { cached: false });
   return true;
 }
@@ -175,6 +201,7 @@ function send(res, status, body, extra = {}) {
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
     'X-Dashboard-Cache': extra.cached ? 'hit' : 'miss',
   });
   res.end(text);

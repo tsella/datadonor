@@ -320,10 +320,19 @@
       const rect = canvas.getBoundingClientRect();
       const px = ev.clientX - rect.left;
       const i = indexAt(st, px);
-      const rows = st.series
-        .map((s) => `${s.name}: <b>${fmt(s.values[i])}</b>${s.unit ? ` ${s.unit}` : ''}`)
-        .join('<br>');
-      tip.innerHTML = `<div class="tip-date">${st.labels[i]}${st.spec.provisional && st.spec.provisional[i] ? ' · provisional' : ''}</div>${rows}`;
+      tip.textContent = '';
+      const dateEl = document.createElement('div');
+      dateEl.className = 'tip-date';
+      dateEl.textContent = `${st.labels[i]}${st.spec.provisional && st.spec.provisional[i] ? ' · provisional' : ''}`;
+      tip.appendChild(dateEl);
+      st.series.forEach((s, idx) => {
+        if (idx > 0) tip.appendChild(document.createElement('br'));
+        tip.appendChild(document.createTextNode(`${s.name}: `));
+        const b = document.createElement('b');
+        b.textContent = fmt(s.values[i]);
+        tip.appendChild(b);
+        if (s.unit) tip.appendChild(document.createTextNode(` ${s.unit}`));
+      });
       tip.hidden = false;
       const cardW = (canvas.closest('.card') || canvas.parentElement).clientWidth;
       tip.style.left = `${Math.min(Math.max(px + 12, 8), Math.max(cardW - 160, 8))}px`;

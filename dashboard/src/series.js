@@ -67,7 +67,7 @@ function provisionalFor(day, { today, lastEnergyDay, lagMinutes, warnMinutes }) 
 async function buildRange(from, to, opts = {}) {
   const now = opts.now || new Date();
   const { dd, hc } = sources();
-  const { tz, off, today } = await context(now);
+  const { tz, off, today } = opts.ctx || await context(now);
 
   const [energyMap, intakeMap, targetMap, recsMap, weightMap, rec, last] = await Promise.all([
     registry.energy.byDay(dd, off, from, to),
@@ -283,12 +283,22 @@ const WINDOW_TTL_MS = 30000;
 const WINDOW_CACHE_MAX = 24;
 const windowCache = new Map();
 
-function cachedBuildRange(from, to, opts = {}) {
-  const key = `${from}|${to}`;
-  const hit = windowCache.get(key);
+function windowCacheKey(from, to, ctx, now = new Date()) {
+  const tzMin = time.tzOffsetMinutes(ctx.tz, now);
+  const offKey = tzMin !== null ? tzMin : ctx.off * 60;
+  return `${from}|${to}|${ctx.today}|${ctx.tz}|${offKey}`;
+}
+
+function _cachedBuildRangeWithCtx(from, to, opts, now, ctx) {
+  const key = windowCacheKey(from, to, ctx, now);
+  const bypass = Boolean(opts.bypassCache);
+  const hit = !bypass ? windowCache.get(key) : null;
   if (hit && Date.now() - hit.at < WINDOW_TTL_MS) return hit.promise;
-  const promise = buildRange(from, to, opts).catch((err) => {
-    windowCache.delete(key);
+  const builder = opts.buildFn || buildRange;
+  const promise = builder(from, to, { ...opts, now, ctx }).catch((err) => {
+    if (windowCache.get(key) && windowCache.get(key).promise === promise) {
+      windowCache.delete(key);
+    }
     throw err;
   });
   windowCache.set(key, { at: Date.now(), promise });
@@ -300,4 +310,23 @@ function cachedBuildRange(from, to, opts = {}) {
   return promise;
 }
 
-module.exports = { buildRange, cachedBuildRange, series, summary, context, bucket, aggregate, provisionalFor, windowCache };
+function cachedBuildRange(from, to, opts = {}) {
+  const now = opts.now || new Date();
+  if (opts.ctx) {
+    return _cachedBuildRangeWithCtx(from, to, opts, now, opts.ctx);
+  }
+  return context(now).then((ctx) => _cachedBuildRangeWithCtx(from, to, opts, now, ctx));
+}
+
+module.exports = {
+  buildRange,
+  cachedBuildRange,
+  windowCacheKey,
+  series,
+  summary,
+  context,
+  bucket,
+  aggregate,
+  provisionalFor,
+  windowCache,
+};

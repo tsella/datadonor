@@ -11,22 +11,56 @@
  */
 const cfg = require('./config');
 
+const TZ_DESIGNATOR = /(?:Z|[+-]\d{2}:?\d{2})$/i;
+
+/**
+ * Parse a stored HealthKit timestamp into epoch milliseconds (NaN if invalid).
+ * Appends 'Z' only when the timestamp carries no explicit timezone designator
+ * (Z, +HH:MM, -HH:MM, +HHMM, -HHMM), so non-UTC offsets never turn into NaN.
+ */
+function parseTimestampMs(raw) {
+  if (raw === null || raw === undefined) return NaN;
+  let s = String(raw).trim();
+  if (!s) return NaN;
+  s = s.replace(/^(\d{4}-\d{2}-\d{2})\s+/, '$1T');
+  s = s.replace(/\s+([+-]\d{2}:?\d{2}|Z)$/i, '$1');
+  s = s.replace(/([+-]\d{2})(\d{2})$/, '$1:$2');
+  if (!TZ_DESIGNATOR.test(s)) s += 'Z';
+  return Date.parse(s);
+}
+
+/**
+ * Convert Intl.DateTimeFormat parts to a UTC epoch millisecond timestamp.
+ * If an older ICU build ever emits hour "24" for midnight, advance the day
+ * rather than wrapping back to 00:00 of the same day.
+ */
+function partsToUtcMs(p) {
+  const year = Number(p.year);
+  const month = Number(p.month);
+  const day = Number(p.day);
+  const hour = Number(p.hour);
+  const minute = Number(p.minute);
+  const second = Number(p.second);
+  if (hour === 24) {
+    return Date.UTC(year, month - 1, day + 1, 0, minute, second);
+  }
+  return Date.UTC(year, month - 1, day, hour, minute, second);
+}
+
 /** Offset of `tzName` at a given UTC instant, in minutes (null if unknown). */
 function tzOffsetMinutes(tzName, utcDate) {
   try {
+    const secMs = Math.floor(utcDate.getTime() / 1000) * 1000;
     const dtf = new Intl.DateTimeFormat('en-US', {
       timeZone: tzName,
-      hour12: false,
+      hourCycle: 'h23',
       year: 'numeric', month: '2-digit', day: '2-digit',
       hour: '2-digit', minute: '2-digit', second: '2-digit',
     });
     const p = {};
-    for (const part of dtf.formatToParts(utcDate)) p[part.type] = part.value;
-    const asUTC = Date.UTC(
-      Number(p.year), Number(p.month) - 1, Number(p.day),
-      Number(p.hour) % 24, Number(p.minute), Number(p.second),
-    );
-    return (asUTC - utcDate.getTime()) / 60000;
+    for (const part of dtf.formatToParts(new Date(secMs))) p[part.type] = part.value;
+    const asUTC = partsToUtcMs(p);
+    return (asUTC - secMs) / 60000;
   } catch (err) {
     return null;
   }
@@ -128,6 +162,8 @@ function isoWeek(iso) {
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 module.exports = {
+  parseTimestampMs,
+  partsToUtcMs,
   tzOffsetMinutes,
   zonedWallToUtc,
   arrivalInstantUtc,

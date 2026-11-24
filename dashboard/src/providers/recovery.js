@@ -9,8 +9,10 @@
  *    this reads the watch only and then UNION-MERGES overlapping intervals —
  *    overlapping stages are one stretch of sleep, not two.
  *  - **Workouts carry their real numbers in the `metadata` JSON**, not in
- *    `value`; a session without a `totalEnergyBurned` is skipped rather than
- *    guessed, which is exactly what `meal_macros.workout_kcal()` does.
+ *    `value`; sessions missing `totalEnergyBurned` still count toward session
+ *    count and duration (with 0 kcal), and overlapping multi-writer sessions
+ *    (e.g. Watch + Strava/Oura) are deduplicated with preference for the
+ *    configured primary watch source.
  */
 const cfg = require('../config');
 const { all } = require('../db');
@@ -72,6 +74,42 @@ function meanPerDay(rows, off) {
   return out;
 }
 
+/** Convert a SQL LIKE pattern (e.g. '%Apple%') into a case-insensitive RegExp. */
+function likeToRegex(pattern) {
+  const escaped = String(pattern || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${escaped.replace(/%/g, '.*').replace(/_/g, '.')}$`, 'i');
+}
+
+/** True when two workout intervals overlap by at least 50% of the shorter one. */
+function workoutsOverlap(a, b) {
+  const overlap = Math.min(a.endMs, b.endMs) - Math.max(a.startMs, b.startMs);
+  if (overlap <= 0) return false;
+  const shorter = Math.min(a.endMs - a.startMs, b.endMs - b.startMs);
+  if (shorter <= 0) return true;
+  return overlap / shorter >= 0.5;
+}
+
+/**
+ * Deduplicate overlapping multi-writer workouts (e.g. Watch + Strava/Oura),
+ * preferring the configured primary watch source (`cfg.energySourceLike`),
+ * then sessions with energy data, then longer sessions.
+ */
+function dedupeWorkouts(candidates) {
+  const ranked = [...candidates].sort((a, b) => {
+    if (a.preferred !== b.preferred) return a.preferred ? -1 : 1;
+    if (a.hasKcal !== b.hasKcal) return a.hasKcal ? -1 : 1;
+    if (a.kcal !== b.kcal) return b.kcal - a.kcal;
+    if (a.minutes !== b.minutes) return b.minutes - a.minutes;
+    return a.startMs - b.startMs;
+  });
+  const accepted = [];
+  for (const c of ranked) {
+    if (accepted.some((a) => workoutsOverlap(a, c))) continue;
+    accepted.push(c);
+  }
+  return accepted.sort((a, b) => a.startMs - b.startMs);
+}
+
 /** Merge overlapping [start,end] intervals and return total minutes. */
 function mergedMinutes(intervals) {
   if (!intervals.length) return 0;
@@ -118,8 +156,8 @@ async function daily(dd, off, from, to) {
   const buckets = new Map();
   for (const r of sleepRows) {
     if (!ASLEEP_STAGES.includes(Number(r.stage))) continue;
-    const s = Date.parse(String(r.start_date).replace(' ', 'T').replace(/Z?$/, 'Z'));
-    const e = Date.parse(String(r.end_date).replace(' ', 'T').replace(/Z?$/, 'Z'));
+    const s = time.parseTimestampMs(r.start_date);
+    const e = time.parseTimestampMs(r.end_date);
     if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) continue;
     /* Attribute the night to the day it ENDED — the morning he woke up on. */
     const wakeDay = time.todayLocal(off, new Date(e));
@@ -132,15 +170,18 @@ async function daily(dd, off, from, to) {
     if (mins > 0) sleep.set(day, Number((mins / 60).toFixed(2)));
   }
 
-  /* Workouts. */
+  /* Workouts: parse all valid sessions, prefer configured watch source, and
+     deduplicate overlapping multi-writer entries so sessions/minutes/kcal are
+     never double-counted. Sessions without totalEnergyBurned are kept with 0 kcal. */
   const workoutRows = await all(
     dd,
-    `SELECT start_date, end_date, metadata FROM health_metrics
+    `SELECT start_date, end_date, source, metadata FROM health_metrics
       WHERE data_type = '${WORKOUT}' AND date(start_date, ${mod}) BETWEEN ? AND ?
       ORDER BY start_date`,
     [from, to],
   );
-  const workouts = new Map();
+  const preferredRe = likeToRegex(cfg.energySourceLike);
+  const candidates = [];
   for (const r of workoutRows) {
     let meta = {};
     try {
@@ -148,26 +189,51 @@ async function daily(dd, off, from, to) {
     } catch (err) {
       meta = {};
     }
-    const durRaw = meta.duration || meta.HKMetadataKeyDuration;
-    let minutes = durRaw ? Number(durRaw) / 60 : null;
-    if (!Number.isFinite(minutes)) {
-      const s = Date.parse(String(r.start_date).replace(' ', 'T').replace(/Z?$/, 'Z'));
-      const e = Date.parse(String(r.end_date).replace(' ', 'T').replace(/Z?$/, 'Z'));
-      minutes = Number.isFinite(s) && Number.isFinite(e) ? (e - s) / 60000 : 0;
+    const startMs = time.parseTimestampMs(r.start_date);
+    if (!Number.isFinite(startMs)) continue;
+    const parsedEndMs = time.parseTimestampMs(r.end_date);
+    const durRaw = meta.duration ?? meta.HKMetadataKeyDuration;
+    let minutes = (durRaw !== undefined && durRaw !== null && durRaw !== '')
+      ? Number(durRaw) / 60
+      : NaN;
+    if (!Number.isFinite(minutes) || minutes <= 0) {
+      minutes = Number.isFinite(parsedEndMs) && parsedEndMs > startMs
+        ? (parsedEndMs - startMs) / 60000
+        : 0;
     }
     if (!(minutes >= cfg.minSessionMinutes)) continue;
-    const kcalRaw = meta.totalEnergyBurned || meta.HKMetadataKeyTotalEnergyBurned;
-    if (kcalRaw === undefined || kcalRaw === null) continue;
-    const kcal = Number(String(kcalRaw).split(/\s+/)[0]);
-    if (!Number.isFinite(kcal)) continue;
-    const day = time.todayLocal(off, new Date(String(r.start_date).replace(' ', 'T').replace(/Z?$/, 'Z')));
-    const name = workoutTypeName(meta.workoutActivityType || meta.activityType);
+    const endMs = Number.isFinite(parsedEndMs) && parsedEndMs > startMs
+      ? parsedEndMs
+      : startMs + minutes * 60000;
+
+    const kcalRaw = meta.totalEnergyBurned ?? meta.HKMetadataKeyTotalEnergyBurned;
+    const parsedKcal = (kcalRaw !== undefined && kcalRaw !== null && kcalRaw !== '')
+      ? Number(String(kcalRaw).trim().split(/\s+/)[0])
+      : NaN;
+    const hasKcal = Number.isFinite(parsedKcal) && parsedKcal >= 0;
+    const kcal = hasKcal ? parsedKcal : 0;
+
+    candidates.push({
+      startMs,
+      endMs,
+      minutes,
+      kcal,
+      hasKcal,
+      name: workoutTypeName(meta.workoutActivityType ?? meta.activityType),
+      source: r.source || '',
+      preferred: preferredRe.test(r.source || ''),
+    });
+  }
+
+  const workouts = new Map();
+  for (const c of dedupeWorkouts(candidates)) {
+    const day = time.todayLocal(off, new Date(c.startMs));
     const cur = workouts.get(day)
       || { sessions: 0, minutes: 0, kcal: 0, types: [] };
     cur.sessions += 1;
-    cur.minutes += minutes;
-    cur.kcal += kcal;
-    if (name && !cur.types.includes(name)) cur.types.push(name);
+    cur.minutes += c.minutes;
+    cur.kcal += c.kcal;
+    if (c.name && !cur.types.includes(c.name)) cur.types.push(c.name);
     workouts.set(day, cur);
   }
   for (const v of workouts.values()) {
@@ -185,4 +251,16 @@ async function daily(dd, off, from, to) {
   };
 }
 
-module.exports = { daily, mergedMinutes, ASLEEP_STAGES, RHR, HRV, TEMP, SLEEP, WORKOUT };
+module.exports = {
+  daily,
+  mergedMinutes,
+  likeToRegex,
+  workoutsOverlap,
+  dedupeWorkouts,
+  ASLEEP_STAGES,
+  RHR,
+  HRV,
+  TEMP,
+  SLEEP,
+  WORKOUT,
+};

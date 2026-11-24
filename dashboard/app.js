@@ -17,7 +17,7 @@ const cfg = require('./src/config');
 const api = require('./src/api');
 const render = require('./src/render');
 
-const PUBLIC_DIR = path.join(__dirname, 'public');
+const PUBLIC_DIR = path.resolve(__dirname, 'public');
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
@@ -28,30 +28,62 @@ const TYPES = {
   '.ico': 'image/x-icon',
 };
 
-function serveStatic(res, pathname) {
-  /* Normalise and re-check the prefix so `..` cannot escape PUBLIC_DIR. */
-  const rel = path.normalize(pathname).replace(/^([/\\]|\.\.[/\\])+/, '');
-  const file = path.join(PUBLIC_DIR, rel);
-  if (!file.startsWith(PUBLIC_DIR)) {
-    res.writeHead(403);
+function serveStatic(req, res, pathname, publicDir = PUBLIC_DIR) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.writeHead(405, {
+      'Content-Type': 'text/plain; charset=utf-8',
+      Allow: 'GET, HEAD',
+    });
+    res.end('Method Not Allowed');
+    return;
+  }
+
+  let decoded;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch (err) {
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Bad request');
+    return;
+  }
+  if (decoded.includes('\0')) {
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Bad request');
+    return;
+  }
+
+  /* Strict containment check: prevent `..` and sibling-prefix escapes (e.g. public-secret). */
+  const root = path.resolve(publicDir);
+  const rel = decoded.replace(/^[/\\]+/, '');
+  const resolved = path.resolve(root, rel);
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+    res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('Forbidden');
     return;
   }
-  fs.readFile(file, (err, data) => {
+  if (resolved === root) {
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Not found');
+    return;
+  }
+
+  fs.readFile(resolved, (err, data) => {
     if (err) {
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('Not found');
       return;
     }
     res.writeHead(200, {
-      'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream',
+      'Content-Type': TYPES[path.extname(resolved)] || 'application/octet-stream',
+      'Content-Length': data.length,
       'Cache-Control': 'no-cache',
+      'X-Content-Type-Options': 'nosniff',
     });
-    res.end(data);
+    res.end(req.method === 'HEAD' ? undefined : data);
   });
 }
 
-const server = http.createServer(async (req, res) => {
+async function handleRequest(req, res) {
   let url;
   try {
     url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -95,21 +127,25 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  serveStatic(res, url.pathname);
-});
-
-server.listen(cfg.port, cfg.bindHost, () => {
-  console.log(`DataDonor dashboard on http://${cfg.bindHost}:${cfg.port}`);
-  console.log(`  bind      : ${cfg.bindHost}:${cfg.port}`);
-  console.log(`  datadonor : ${cfg.ddDb}`);
-  console.log(`  food log  : ${cfg.healthDb}`);
-});
-
-for (const sig of ['SIGINT', 'SIGTERM']) {
-  process.on(sig, () => {
-    console.log(`${sig} received, closing server`);
-    server.close(() => process.exit(0));
-  });
+  serveStatic(req, res, url.pathname);
 }
 
-module.exports = { server };
+const server = http.createServer(handleRequest);
+
+if (require.main === module) {
+  server.listen(cfg.port, cfg.bindHost, () => {
+    console.log(`DataDonor dashboard on http://${cfg.bindHost}:${cfg.port}`);
+    console.log(`  bind      : ${cfg.bindHost}:${cfg.port}`);
+    console.log(`  datadonor : ${cfg.ddDb}`);
+    console.log(`  food log  : ${cfg.healthDb}`);
+  });
+
+  for (const sig of ['SIGINT', 'SIGTERM']) {
+    process.on(sig, () => {
+      console.log(`${sig} received, closing server`);
+      server.close(() => process.exit(0));
+    });
+  }
+}
+
+module.exports = { server, handleRequest, serveStatic, PUBLIC_DIR };

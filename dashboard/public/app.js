@@ -82,6 +82,15 @@
     window.history.replaceState({}, '', `${window.location.pathname}?${p.toString()}`);
   }
 
+  function apiUrl(pathname, params) {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(params || {})) {
+      if (v !== null && v !== undefined) p.set(k, String(v));
+    }
+    const qs = p.toString();
+    return qs ? `${pathname}?${qs}` : pathname;
+  }
+
   async function json(url) {
     const res = await fetch(url, { headers: { Accept: 'application/json' } });
     const body = await res.json().catch(() => ({}));
@@ -98,13 +107,17 @@
 
   function setBanner(lines) {
     const el = $('banner');
+    el.textContent = '';
     if (!lines.length) {
       el.hidden = true;
-      el.innerHTML = '';
       return;
     }
     el.hidden = false;
-    el.innerHTML = lines.map((l) => `<div>${l}</div>`).join('');
+    for (const l of lines) {
+      const div = document.createElement('div');
+      div.textContent = String(l);
+      el.appendChild(div);
+    }
   }
 
   /* ── summary strip ─────────────────────────────────────────────────── */
@@ -123,9 +136,21 @@
       ['RHR / HRV', `${fmt(s.mean_rhr, 0)} bpm / ${fmt(s.mean_hrv, 0)} ms`],
       ['Best deficit', s.best_deficit_day ? `${s.best_deficit_day.date} · ${fmt(s.best_deficit_day.deficit)}` : '—'],
     ];
-    $('summary').innerHTML = cells
-      .map(([k, v]) => `<div class="cell"><span class="k">${k}</span><span class="v">${v}</span></div>`)
-      .join('');
+    const container = $('summary');
+    container.textContent = '';
+    for (const [k, v] of cells) {
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      const kSpan = document.createElement('span');
+      kSpan.className = 'k';
+      kSpan.textContent = k;
+      const vSpan = document.createElement('span');
+      vSpan.className = 'v';
+      vSpan.textContent = v;
+      cell.appendChild(kSpan);
+      cell.appendChild(vSpan);
+      container.appendChild(cell);
+    }
   }
 
   /* ── charts ────────────────────────────────────────────────────────── */
@@ -133,7 +158,12 @@
     const canvas = $(def.id);
     if (!canvas) return;
     const keys = def.series.map((s) => s.key).concat((def.refs || []).map((r) => r.key));
-    const url = `/api/series?metric=${keys.join(',')}&from=${state.from}&to=${state.to}&grain=${state.grain}`;
+    const url = apiUrl('/api/series', {
+      metric: keys.join(','),
+      from: state.from,
+      to: state.to,
+      grain: state.grain,
+    });
     let data;
     try {
       data = await json(url);
@@ -175,10 +205,17 @@
         legend.className = 'legend';
         card.insertBefore(legend, canvas);
       }
-      legend.innerHTML = series
-        .filter((s) => s.values.some((v) => v !== null))
-        .map((s) => `<span class="lg"><i class="${s.kind === 'line' ? 'ln' : 'br'}${s.dashed ? ' dash' : ''}" style="--c:${s.color}"></i>${s.name}</span>`)
-        .join('');
+      legend.textContent = '';
+      for (const s of series.filter((item) => item.values.some((v) => v !== null))) {
+        const span = document.createElement('span');
+        span.className = 'lg';
+        const icon = document.createElement('i');
+        icon.className = `${s.kind === 'line' ? 'ln' : 'br'}${s.dashed ? ' dash' : ''}`;
+        if (s.color) icon.style.setProperty('--c', s.color);
+        span.appendChild(icon);
+        span.appendChild(document.createTextNode(String(s.name)));
+        legend.appendChild(span);
+      }
     }
     Charts.render(canvas, { type: def.type, labels, series, thresholds, provisional });
   }
@@ -196,7 +233,12 @@
       ctx.fillText('pick one or more metrics below', canvas.clientWidth / 2, 60);
       return;
     }
-    const url = `/api/series?metric=${state.custom.join(',')}&from=${state.from}&to=${state.to}&grain=${state.grain}`;
+    const url = apiUrl('/api/series', {
+      metric: state.custom.join(','),
+      from: state.from,
+      to: state.to,
+      grain: state.grain,
+    });
     try {
       const data = await json(url);
       const labels = data.series[0] ? data.series[0].points.map((p) => p.key) : [];
@@ -225,19 +267,37 @@
       if (!groups.has(m.group)) groups.set(m.group, []);
       groups.get(m.group).push(m);
     }
-    el.innerHTML = [...groups.entries()].map(([g, items]) => `
-      <div class="pick-group">
-        <span class="pick-head">${g}</span>
-        ${items.map((m) => `<label class="pick"><input type="checkbox" value="${m.key}"
-           ${state.custom.includes(m.key) ? 'checked' : ''}><span>${m.label} <em>${m.unit}</em></span></label>`).join('')}
-      </div>`).join('');
-    el.querySelectorAll('input[type=checkbox]').forEach((box) => {
-      box.addEventListener('change', () => {
-        state.custom = [...el.querySelectorAll('input:checked')].map((b) => b.value);
-        writeUrl();
-        renderCustom();
-      });
-    });
+    el.textContent = '';
+    for (const [g, items] of groups.entries()) {
+      const groupDiv = document.createElement('div');
+      groupDiv.className = 'pick-group';
+      const head = document.createElement('span');
+      head.className = 'pick-head';
+      head.textContent = String(g);
+      groupDiv.appendChild(head);
+      for (const m of items) {
+        const label = document.createElement('label');
+        label.className = 'pick';
+        const box = document.createElement('input');
+        box.type = 'checkbox';
+        box.value = String(m.key);
+        box.checked = state.custom.includes(m.key);
+        box.addEventListener('change', () => {
+          state.custom = [...el.querySelectorAll('input:checked')].map((b) => b.value);
+          writeUrl();
+          renderCustom();
+        });
+        const span = document.createElement('span');
+        span.appendChild(document.createTextNode(`${m.label} `));
+        const em = document.createElement('em');
+        em.textContent = String(m.unit);
+        span.appendChild(em);
+        label.appendChild(box);
+        label.appendChild(span);
+        groupDiv.appendChild(label);
+      }
+      el.appendChild(groupDiv);
+    }
   }
 
   async function refresh({ refetchMeta = false } = {}) {
@@ -260,7 +320,7 @@
       $('tz-label').textContent = `${state.meta.timezone} · UTC${state.meta.offset_hours >= 0 ? '+' : ''}${state.meta.offset_hours}`;
 
       const [summary] = await Promise.all([
-        json(`/api/summary?from=${state.from}&to=${state.to}`),
+        json(apiUrl('/api/summary', { from: state.from, to: state.to })),
         ...PANELS.map(renderPanel),
         renderCustom(),
       ]);

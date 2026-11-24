@@ -58,8 +58,8 @@ async function lastSample(dd, now = new Date()) {
     [cfg.energySourceLike],
   );
   if (!raw) return { at: null, lag_minutes: null };
-  const at = String(raw).replace(' ', 'T');
-  const ms = Date.parse(at.endsWith('Z') ? at : `${at}Z`);
+  const at = String(raw).trim().replace(/^(\d{4}-\d{2}-\d{2})\s+/, '$1T');
+  const ms = time.parseTimestampMs(raw);
   const lag = Number.isFinite(ms) ? Math.round((now.getTime() - ms) / 60000) : null;
   return { at, lag_minutes: lag };
 }
