@@ -298,25 +298,36 @@ struct ReadinessCardView: View {
         return "Daily recovery score"
     }
 
+    internal static func scoreRingProgress(for score: Int) -> Double {
+        max(0.0, min(1.0, Double(score) / 100.0))
+    }
+
+    internal static func scoreRingGradientEndDegrees(for score: Int) -> Double {
+        max(1.0, 360.0 * scoreRingProgress(for: score))
+    }
+
     private func scoreRing(score: Int, color: Color) -> some View {
-        let progress = Double(score) / 100.0
+        let progress = Self.scoreRingProgress(for: score)
+        let endDegrees = Self.scoreRingGradientEndDegrees(for: score)
         return ZStack {
             Circle()
                 .stroke(color.opacity(0.16), lineWidth: 9)
 
-            Circle()
-                .trim(from: 0, to: progress)
-                .stroke(
-                    AngularGradient(
-                        gradient: Gradient(colors: [color.opacity(0.65), color]),
-                        center: .center,
-                        startAngle: .degrees(0),
-                        endAngle: .degrees(360 * progress)
-                    ),
-                    style: StrokeStyle(lineWidth: 9, lineCap: .round)
-                )
-                .rotationEffect(.degrees(-90))
-                .animation(AppTheme.Animations.chartUpdate, value: score)
+            if progress > 0 {
+                Circle()
+                    .trim(from: 0, to: progress)
+                    .stroke(
+                        AngularGradient(
+                            gradient: Gradient(colors: [color.opacity(0.65), color]),
+                            center: .center,
+                            startAngle: .degrees(0),
+                            endAngle: .degrees(endDegrees)
+                        ),
+                        style: StrokeStyle(lineWidth: 9, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+                    .animation(AppTheme.Animations.chartUpdate, value: score)
+            }
 
             VStack(spacing: 0) {
                 Text("\(score)")
@@ -335,7 +346,7 @@ struct ReadinessCardView: View {
 
     private func factorRow(_ factor: ReadinessFactor) -> some View {
         let factorColor = factor.tier.color
-        let fraction = max(0.06, min(1.0, factor.score / 100.0))
+        let fraction = factor.score.isFinite ? max(0.06, min(1.0, factor.score / 100.0)) : 0.06
 
         return VStack(spacing: 6) {
             HStack(spacing: 8) {
@@ -362,6 +373,7 @@ struct ReadinessCardView: View {
             }
 
             GeometryReader { geo in
+                let barWidth = max(0, geo.size.width) * fraction
                 ZStack(alignment: .leading) {
                     Capsule()
                         .fill(AppTheme.Colors.trackFill)
@@ -373,7 +385,7 @@ struct ReadinessCardView: View {
                                 endPoint: .trailing
                             )
                         )
-                        .frame(width: geo.size.width * fraction)
+                        .frame(width: barWidth.isFinite ? barWidth : 0)
                 }
             }
             .frame(height: 6)

@@ -312,8 +312,16 @@ final class BackgroundSyncManager {
             }
         }
 
-        if let ok = try? await syncEngine.ping(url: primaryURL, apiKey: apiKey, timeout: 3.0), ok {
+        switch await syncEngine.checkConnection(url: primaryURL, apiKey: apiKey, timeout: 3.0) {
+        case .ok:
             return primaryURL
+        case .unauthorized:
+            DataDonorLogger.shared.log(
+                "Background sync deferred: server rejected API key.",
+                level: .warn)
+            return nil
+        case .serverError, .unreachable:
+            break
         }
 
         if Task.isCancelled { return nil }
@@ -329,8 +337,16 @@ final class BackgroundSyncManager {
                 DataDonorLogger.shared.log(
                     "Primary host \(primaryURL.host ?? "") did not answer ping; trying cached IP \(fallbackURL.host ?? "").",
                     level: .debug)
-                if let ok = try? await syncEngine.ping(url: fallbackURL, apiKey: apiKey, timeout: 3.0), ok {
+                switch await syncEngine.checkConnection(url: fallbackURL, apiKey: apiKey, timeout: 3.0) {
+                case .ok:
                     return fallbackURL
+                case .unauthorized:
+                    DataDonorLogger.shared.log(
+                        "Background sync deferred: server rejected API key over cached IP.",
+                        level: .warn)
+                    return nil
+                case .serverError, .unreachable:
+                    break
                 }
             }
         }

@@ -30,6 +30,7 @@ enum AppTheme {
         static let trackFill = Color.primary.opacity(0.07)
         static let destructive = Color.red.opacity(0.9)
         static let warning = Color.orange
+        static let typicalBandFill = emerald.opacity(0.11)
 
         // Splash screen palette
         static let splashBackgroundTop = Color(red: 16/255.0, green: 23/255.0, blue: 38/255.0)
@@ -115,6 +116,14 @@ enum AppTheme {
                 endPoint: .bottom
             )
         }
+
+        static func trendAreaGradient(for color: Color) -> LinearGradient {
+            LinearGradient(
+                colors: [color.opacity(0.24), color.opacity(0.05), color.opacity(0.0)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
     }
 
     enum Layout {
@@ -130,8 +139,11 @@ enum AppTheme {
     }
 
     enum Animations {
-        static let collapse = Animation.spring(response: 0.32, dampingFraction: 0.84)
-        static let chartUpdate = Animation.spring(response: 0.55, dampingFraction: 0.82)
+        /// Critically damped (`dampingFraction: 1.0`) so animating Swift Charts `BarMark` /
+        /// `RectangleMark` heights and collapsible card frames never overshoots below zero
+        /// (which triggers `[SwiftUI] Invalid frame dimension (negative or non-finite).`).
+        static let collapse = Animation.spring(response: 0.32, dampingFraction: 1.0)
+        static let chartUpdate = Animation.spring(response: 0.50, dampingFraction: 1.0)
         static let scrubRelease = Animation.easeOut(duration: 0.18)
         static let readoutUpdate = Animation.easeOut(duration: 0.14)
     }
@@ -319,12 +331,13 @@ struct DateChartScrubOverlay: View {
                         }
                         .onChanged { value in
                             guard case .second(true, let drag) = value,
-                                  let location = drag?.location else {
+                                  let location = drag?.location,
+                                  let plotFrame = proxy.plotFrame else {
                                 return
                             }
-                            let origin = geometry[proxy.plotAreaFrame].origin
+                            let origin = geometry[plotFrame].origin
                             let locationX = location.x - origin.x
-                            guard locationX >= 0, locationX <= proxy.plotAreaSize.width,
+                            guard locationX >= 0, locationX <= proxy.plotSize.width,
                                   let date = proxy.value(atX: locationX, as: Date.self) else {
                                 return
                             }
@@ -335,10 +348,22 @@ struct DateChartScrubOverlay: View {
                         }
                 )
         }
-        .onChange(of: isScrubbing) { active in
+        .onChange(of: isScrubbing) { _, active in
             if !active {
                 onEnd()
             }
+        }
+    }
+}
+
+extension View {
+    /// Prevents parent SwiftUI `withAnimation` transactions from animating Swift Charts'
+    /// internal `AxisMarks` scale-domain transitions, which otherwise log
+    /// `[SwiftUI] Invalid frame dimension (negative or non-finite).` on every animated frame.
+    func disableChartAxisAnimations() -> some View {
+        transaction { transaction in
+            transaction.animation = nil
+            transaction.disablesAnimations = true
         }
     }
 }

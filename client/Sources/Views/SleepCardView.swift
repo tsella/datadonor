@@ -445,15 +445,20 @@ struct SleepCardView: View {
                 }
             )
         }
+        .disableChartAxisAnimations()
     }
 
     private func stageDistributionBar(_ shares: [SleepStageShare]) -> some View {
         GeometryReader { geo in
+            let spacingTotal = CGFloat(max(0, shares.count - 1)) * 2
+            let availableWidth = max(0, geo.size.width - spacingTotal)
             HStack(spacing: 2) {
                 ForEach(shares) { part in
+                    let safeRatio = part.ratio.isFinite ? max(0, min(1, part.ratio)) : 0
+                    let segmentWidth = availableWidth > 0 ? max(4, availableWidth * safeRatio) : 0
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(part.stage.color)
-                        .frame(width: max(4, (geo.size.width - CGFloat(max(0, shares.count - 1)) * 2) * part.ratio))
+                        .frame(width: segmentWidth.isFinite ? segmentWidth : 0)
                 }
             }
         }

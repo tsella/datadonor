@@ -170,7 +170,7 @@ struct HeartRate24hSummary: Equatable, Sendable, Codable {
     ) -> HeartRate24hSummary {
         let windowStart = windowEnd.addingTimeInterval(-24 * 60 * 60)
         let inWindow = samples
-            .filter { $0.date >= windowStart && $0.date <= windowEnd }
+            .filter { $0.bpm.isFinite && $0.bpm > 0 && $0.date >= windowStart && $0.date <= windowEnd }
             .sorted { $0.date < $1.date }
 
         // Clip workouts to the 24h window and deduplicate identical multi-writer entries
@@ -229,7 +229,8 @@ struct HeartRate24hSummary: Equatable, Sendable, Codable {
         var previousDate: Date?
         for index in sortedIndices {
             guard let values = grouped[index], !values.isEmpty else { continue }
-            let bucketDate = windowStart.addingTimeInterval((Double(index) + 0.5) * bucketInterval)
+            let rawBucketDate = windowStart.addingTimeInterval((Double(index) + 0.5) * bucketInterval)
+            let bucketDate = min(windowEnd, max(windowStart, rawBucketDate))
             if let prev = previousDate, bucketDate.timeIntervalSince(prev) > gapBreakThreshold {
                 segmentId += 1
             }
@@ -700,5 +701,6 @@ struct HeartRateCardView: View {
                 }
             )
         }
+        .disableChartAxisAnimations()
     }
 }

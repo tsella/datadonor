@@ -182,22 +182,24 @@ struct DashboardView: View {
             }
             .padding(.top, 2)
         }
-        .task {
+        .onAppear {
             lastRefreshCount = healthQueryManager.totalRecordsSynced
             refreshData()
         }
-        .onAppear {
+        .onChange(of: customServerURL) {
             refreshData()
         }
-        .onChange(of: customServerURL) { _ in
-            refreshData()
-        }
-        .onChange(of: scenePhase) { newPhase in
-            if newPhase == .active {
+        .onChange(of: scenePhase) { _, newPhase in
+            switch newPhase {
+            case .active:
                 refreshData()
+            case .background:
+                cancelRefresh()
+            default:
+                break
             }
         }
-        .onChange(of: healthQueryManager.totalRecordsSynced) { newTotal in
+        .onChange(of: healthQueryManager.totalRecordsSynced) { _, newTotal in
             guard healthQueryManager.isSyncing else { return }
             if newTotal < lastRefreshCount {
                 lastRefreshCount = newTotal
@@ -206,13 +208,13 @@ struct DashboardView: View {
                 refreshData()
             }
         }
-        .onChange(of: healthQueryManager.isSyncing) { isSyncing in
+        .onChange(of: healthQueryManager.isSyncing) { _, isSyncing in
             if !isSyncing {
                 lastRefreshCount = healthQueryManager.totalRecordsSynced
                 refreshData()
             }
         }
-        .onChange(of: serverDiscoveryManager.activeServerURL) { newURL in
+        .onChange(of: serverDiscoveryManager.activeServerURL) { _, newURL in
             if newURL != nil {
                 refreshData()
             }
@@ -311,6 +313,7 @@ struct DashboardView: View {
                 }
             )
         }
+        .disableChartAxisAnimations()
     }
 
     private func categoryPill(for type: String) -> some View {
@@ -369,6 +372,12 @@ struct DashboardView: View {
         } else {
             return "\(count)"
         }
+    }
+
+    private func cancelRefresh() {
+        _ = fetchGuard.beginNext()
+        fetchTask?.cancel()
+        fetchTask = nil
     }
 
     private func refreshData() {
@@ -459,16 +468,22 @@ struct DashboardView: View {
             ? newIndex
             : SyncHistoryIndex.build(from: points, selectedCategory: selectedCategory)
 
+        let nextSelectedMonth: Date? = selectedMonth.flatMap {
+            finalIndex.visibleTotalByMonth[$0] != nil ? $0 : nil
+        }
+
         if animated && UIApplication.shared.applicationState == .active {
             withAnimation(AppTheme.Animations.chartUpdate) {
                 syncData = points
                 index = finalIndex
                 serverTotalRecords = serverTotal
+                selectedMonth = nextSelectedMonth
             }
         } else {
             syncData = points
             index = finalIndex
             serverTotalRecords = serverTotal
+            selectedMonth = nextSelectedMonth
         }
     }
 }

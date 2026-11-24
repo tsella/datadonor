@@ -7,12 +7,15 @@ struct SettingsView: View {
     @EnvironmentObject private var syncEngine: SyncEngine
     
     @State private var apiKey: String = ServerResolver.loadApiKey()
+    @State private var apiKeySaveError: String?
     @State private var isRevealingApiKey = false
     @State private var isShowingQRScanner = false
     @State private var isShowingResetConfirmation = false
     @State private var connectionStatusMessage: String?
     @State private var connectionStatusSuccess = false
     @State private var isTestingConnection = false
+    @State private var testConnectionTask: Task<Void, Never>?
+    @State private var testConnectionGuard = FetchGenerationGuard()
     
     @State private var approvedServers: [String] = ServerResolver.approvedServers()
     
@@ -41,12 +44,18 @@ struct SettingsView: View {
                     .buttonStyle(.borderless)
                 }
 
+                if let apiKeySaveError {
+                    Label(apiKeySaveError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundColor(.red)
+                }
+
                 if let resolvedURL = ServerResolver.resolve(
                     override: customServerURL,
                     discovered: serverDiscoveryManager.activeServerURL
                 ), !apiKey.isEmpty {
                     Button(action: {
-                        Task { await testConnection(url: resolvedURL) }
+                        startTestConnection(url: resolvedURL)
                     }) {
                         HStack {
                             Text("Test Connection")
@@ -160,9 +169,15 @@ struct SettingsView: View {
             apiKey = ServerResolver.loadApiKey()
             approvedServers = ServerResolver.approvedServers()
         }
-        .onChange(of: apiKey) { newValue in
-            ServerResolver.saveApiKey(newValue)
-            connectionStatusMessage = nil
+        .onChange(of: apiKey) { _, newValue in
+            persistApiKey(newValue)
+            cancelTestConnection(clearMessage: true)
+        }
+        .onChange(of: customServerURL) {
+            cancelTestConnection(clearMessage: true)
+        }
+        .onDisappear {
+            cancelTestConnection(clearMessage: false)
         }
         .alert("Reset Sync State?", isPresented: $isShowingResetConfirmation) {
             Button("Reset", role: .destructive) {
@@ -175,10 +190,18 @@ struct SettingsView: View {
         .sheet(isPresented: $isShowingQRScanner) {
             QRScannerView { scannedKey in
                 apiKey = scannedKey
-                ServerResolver.saveApiKey(scannedKey)
+                persistApiKey(scannedKey)
                 isShowingQRScanner = false
             }
             .ignoresSafeArea()
+        }
+    }
+
+    private func persistApiKey(_ value: String) {
+        if ServerResolver.saveApiKey(value) {
+            apiKeySaveError = nil
+        } else {
+            apiKeySaveError = "Could not save API key to Keychain. Unlock your device and try again."
         }
     }
 
@@ -189,21 +212,48 @@ struct SettingsView: View {
         return "\(version) (\(build))"
     }
 
-    @MainActor
-    private func testConnection(url: URL) async {
+    private func cancelTestConnection(clearMessage: Bool) {
+        _ = testConnectionGuard.beginNext()
+        testConnectionTask?.cancel()
+        testConnectionTask = nil
+        isTestingConnection = false
+        if clearMessage {
+            connectionStatusMessage = nil
+        }
+    }
+
+    private func startTestConnection(url: URL) {
+        testConnectionTask?.cancel()
+        let generation = testConnectionGuard.beginNext()
+        let keySnapshot = apiKey
+        let engine = syncEngine
+
         isTestingConnection = true
         connectionStatusMessage = nil
-        defer { isTestingConnection = false }
 
-        do {
-            let ok = try await syncEngine.ping(url: url, apiKey: apiKey)
-            connectionStatusSuccess = ok
-            connectionStatusMessage = ok
-                ? "Connected and authenticated with \(url.host ?? url.absoluteString)."
-                : "Server responded, but rejected the API key."
-        } catch {
-            connectionStatusSuccess = false
-            connectionStatusMessage = "Connection failed: \(error.localizedDescription)"
+        testConnectionTask = Task { @MainActor in
+            defer {
+                if testConnectionGuard.isCurrent(generation) {
+                    isTestingConnection = false
+                }
+            }
+            let result = await engine.checkConnection(url: url, apiKey: keySnapshot)
+            guard !Task.isCancelled, testConnectionGuard.isCurrent(generation) else { return }
+
+            switch result {
+            case .ok:
+                connectionStatusSuccess = true
+                connectionStatusMessage = "Connected and authenticated with \(url.host ?? url.absoluteString)."
+            case .unauthorized:
+                connectionStatusSuccess = false
+                connectionStatusMessage = "Server responded, but rejected the API key."
+            case .serverError(let code):
+                connectionStatusSuccess = false
+                connectionStatusMessage = "Server returned HTTP \(code)."
+            case .unreachable(let reason):
+                connectionStatusSuccess = false
+                connectionStatusMessage = "Connection failed: \(reason)"
+            }
         }
     }
 }

@@ -1,14 +1,22 @@
 import Foundation
 
-enum LogLevel: String, Comparable {
+enum LogLevel: String, Comparable, CaseIterable, Sendable {
     case debug = "DEBUG"
     case info = "INFO"
     case warn = "WARN"
     case error = "ERROR"
-    
+
+    var severityRank: Int {
+        switch self {
+        case .debug: return 0
+        case .info: return 1
+        case .warn: return 2
+        case .error: return 3
+        }
+    }
+
     static func < (lhs: LogLevel, rhs: LogLevel) -> Bool {
-        let order: [LogLevel: Int] = [.debug: 0, .info: 1, .warn: 2, .error: 3]
-        return order[lhs]! < order[rhs]!
+        lhs.severityRank < rhs.severityRank
     }
 }
 

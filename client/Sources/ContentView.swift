@@ -115,16 +115,15 @@ struct ContentView: View {
                     healthStore: healthStoreManager.healthStore,
                     isAuthorized: healthStoreManager.isAuthorized
                 )
-                refreshConnectionStatus()
             }
             .onAppear {
                 serverDiscoveryManager.startDiscovery()
                 refreshConnectionStatus()
             }
-            .onChange(of: customServerURL) { _ in
+            .onChange(of: customServerURL) {
                 refreshConnectionStatus()
             }
-            .onChange(of: scenePhase) { newPhase in
+            .onChange(of: scenePhase) { _, newPhase in
                 switch newPhase {
                 case .active:
                     serverDiscoveryManager.startDiscovery()
@@ -136,15 +135,14 @@ struct ContentView: View {
                 case .background:
                     serverDiscoveryManager.stopDiscovery()
                     vitalsStore.cancel()
-                    connectionCheckTask?.cancel()
-                    connectionCheckTask = nil
+                    cancelConnectionCheck()
                     BackgroundSyncManager.shared.scheduleAppRefresh()
                     BackgroundSyncManager.shared.scheduleProcessing()
                 default:
                     break
                 }
             }
-            .onChange(of: healthStoreManager.isAuthorized) { authorized in
+            .onChange(of: healthStoreManager.isAuthorized) { _, authorized in
                 if authorized {
                     vitalsStore.refresh(
                         healthStore: healthStoreManager.healthStore,
@@ -152,20 +150,10 @@ struct ContentView: View {
                     )
                 }
             }
-            .onChange(of: serverDiscoveryManager.activeServerURL) { newURL in
-                refreshConnectionStatus()
-                let currentKey = ServerResolver.loadApiKey()
-                guard newURL != nil, !healthQueryManager.isSyncing, healthStoreManager.isAuthorized,
-                      !currentKey.isEmpty else { return }
-                Task {
-                    await healthQueryManager.performSync(
-                        syncEngine: syncEngine,
-                        serverURL: ServerResolver.resolve(override: customServerURL, discovered: newURL),
-                        apiKey: currentKey
-                    )
-                }
+            .onChange(of: serverDiscoveryManager.activeServerURL) { _, newURL in
+                refreshConnectionStatus(autoSyncIfConnected: newURL != nil)
             }
-            .onChange(of: healthQueryManager.isSyncing) { isSyncing in
+            .onChange(of: healthQueryManager.isSyncing) { _, isSyncing in
                 if !isSyncing {
                     vitalsStore.refresh(
                         healthStore: healthStoreManager.healthStore,
@@ -477,7 +465,13 @@ struct ContentView: View {
         return url.absoluteString
     }
 
-    private func refreshConnectionStatus() {
+    private func cancelConnectionCheck() {
+        _ = connectionCheckGuard.beginNext()
+        connectionCheckTask?.cancel()
+        connectionCheckTask = nil
+    }
+
+    private func refreshConnectionStatus(autoSyncIfConnected: Bool = false) {
         connectionCheckTask?.cancel()
         let generation = connectionCheckGuard.beginNext()
         let apiKey = ServerResolver.loadApiKey()
@@ -500,10 +494,24 @@ struct ContentView: View {
         }
 
         let engine = syncEngine
+        let queryManager = healthQueryManager
+        let storeManager = healthStoreManager
         connectionCheckTask = Task { @MainActor in
             let result = await engine.checkConnection(url: urlToProbe, apiKey: apiKey)
             guard !Task.isCancelled, connectionCheckGuard.isCurrent(generation) else { return }
-            connectionStatus = ServerConnectionStatus.from(pingResult: result, url: urlToProbe)
+            let nextStatus = ServerConnectionStatus.from(pingResult: result, url: urlToProbe)
+            connectionStatus = nextStatus
+
+            if autoSyncIfConnected,
+               nextStatus == .connected(urlToProbe),
+               !queryManager.isSyncing,
+               storeManager.isAuthorized {
+                await queryManager.performSync(
+                    syncEngine: engine,
+                    serverURL: urlToProbe,
+                    apiKey: apiKey
+                )
+            }
         }
     }
 
@@ -550,6 +558,12 @@ private struct VitalsCardsSection: View {
                 isLoading: vitalsStore.isLoading
             )
 
+            OvernightVitalsCardView(
+                summary: vitalsStore.overnightVitals,
+                isAuthorized: isAuthorized,
+                isLoading: vitalsStore.isLoading
+            )
+
             ReadinessCardView(
                 summary: vitalsStore.readiness,
                 isAuthorized: isAuthorized,
@@ -558,6 +572,18 @@ private struct VitalsCardsSection: View {
 
             EnergyCardView(
                 summary: vitalsStore.energy,
+                isAuthorized: isAuthorized,
+                isLoading: vitalsStore.isLoading
+            )
+
+            CardioFitnessCardView(
+                summary: vitalsStore.cardioFitness,
+                isAuthorized: isAuthorized,
+                isLoading: vitalsStore.isLoading
+            )
+
+            GaitBiomechanicsCardView(
+                summary: vitalsStore.gait,
                 isAuthorized: isAuthorized,
                 isLoading: vitalsStore.isLoading
             )

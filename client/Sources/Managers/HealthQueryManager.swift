@@ -36,7 +36,7 @@ private struct FetchedPage: Sendable {
     let status: PageReadStatus
 }
 
-private struct PendingMultiTypeBatch {
+internal struct PendingMultiTypeBatch {
     var dataPoints: [HealthDataPoint] = []
     var deletedUuids: [String] = []
     var anchors: [String: Data] = [:]
@@ -58,7 +58,8 @@ private struct PendingMultiTypeBatch {
         deletedUuids: [String],
         newAnchorData: Data?,
         tokenPart: String?,
-        nextSweepOffset: Int?
+        nextSweepOffset: Int?,
+        hitPageLimit: Bool = false
     ) {
         self.dataPoints.append(contentsOf: dataPoints)
         self.deletedUuids.append(contentsOf: deletedUuids)
@@ -69,7 +70,9 @@ private struct PendingMultiTypeBatch {
             self.tokenParts.append(tokenPart)
         }
         self.typeIdentifiers.append(typeIdentifier)
-        if let nextSweepOffset {
+        // Only advance the sweep cursor for types that finished in this page.
+        // Types that hit `pageLimit` must not advance the cursor until `exhaustQuery` finishes.
+        if !hitPageLimit, let nextSweepOffset {
             self.nextSweepOffset = nextSweepOffset
         }
     }
@@ -270,8 +273,8 @@ final class HealthQueryManager: ObservableObject {
         } else if let workoutSample = sample as? HKWorkout {
             var workoutMeta = sampleMetadata ?? [String: String]()
             workoutMeta["duration"] = String(workoutSample.duration)
-            if let energy = workoutSample.totalEnergyBurned {
-                workoutMeta["totalEnergyBurned"] = String(energy.doubleValue(for: .kilocalorie()))
+            if let activeEnergyKcal = workoutActiveEnergyKilocalories(for: workoutSample) {
+                workoutMeta["totalEnergyBurned"] = String(activeEnergyKcal)
             }
             if let distance = workoutSample.totalDistance {
                 workoutMeta["totalDistance"] = String(distance.doubleValue(for: .meter()))
@@ -290,6 +293,21 @@ final class HealthQueryManager: ObservableObject {
             )
         }
         return nil
+    }
+
+    nonisolated internal static func workoutActiveEnergyKilocalories(for workout: HKWorkout) -> Double? {
+        workoutActiveEnergyKilocalories(
+            activeEnergyQuantity: workout.statistics(for: HKQuantityType(.activeEnergyBurned))?.sumQuantity()
+        )
+    }
+
+    nonisolated internal static func workoutActiveEnergyKilocalories(activeEnergyQuantity: HKQuantity?) -> Double? {
+        guard let quantity = activeEnergyQuantity,
+              quantity.is(compatibleWith: .kilocalorie()) else {
+            return nil
+        }
+        let kcal = quantity.doubleValue(for: .kilocalorie())
+        return kcal.isFinite ? kcal : nil
     }
 
     /// Maps samples, computes the deterministic upload token and encodes the JSON payload
@@ -353,11 +371,30 @@ final class HealthQueryManager: ObservableObject {
         return [.workoutType()]
     }
 
-    private enum ExhaustOutcome {
+    internal enum ExhaustOutcome {
         case success
         case failed
         case cancelled
         case databaseLocked
+    }
+
+    internal var currentSweepOffset: Int {
+        defaults.integer(forKey: Self.sweepOffsetKey)
+    }
+
+    internal func commitFlushedBatch(anchors: [String: Data], nextSweepOffset: Int?) {
+        for (typeId, anchorData) in anchors {
+            defaults.set(anchorData, forKey: Self.anchorPrefix + typeId)
+        }
+        if let nextSweepOffset {
+            defaults.set(nextSweepOffset, forKey: Self.sweepOffsetKey)
+        }
+    }
+
+    internal func commitExhaustOutcome(_ outcome: ExhaustOutcome, nextSweepOffset: Int?) {
+        if outcome == .success, let nextSweepOffset {
+            defaults.set(nextSweepOffset, forKey: Self.sweepOffsetKey)
+        }
     }
 
     nonisolated private static func isDatabaseInaccessible(_ error: Error) -> Bool {
@@ -521,12 +558,7 @@ final class HealthQueryManager: ObservableObject {
                 timeout: timeout
             )
 
-            for (typeId, anchorData) in anchors {
-                defaults.set(anchorData, forKey: Self.anchorPrefix + typeId)
-            }
-            if let nextSweepOffset {
-                defaults.set(nextSweepOffset, forKey: Self.sweepOffsetKey)
-            }
+            commitFlushedBatch(anchors: anchors, nextSweepOffset: nextSweepOffset)
 
             let count = dataPoints.count
             DataDonorLogger.shared.log(
@@ -910,12 +942,61 @@ final class HealthQueryManager: ObservableObject {
                     }
 
                     // All samples were unmappable and there were no deletions; advance
-                    // anchor without a network round trip.
+                    // anchor without a network round trip. If this page hit `pageLimit`,
+                    // drain remaining pages before advancing `nextTypeSweepOffset`.
                     if page.dataPoints.isEmpty && page.deletedUuids.isEmpty {
                         if let newAnchorData = page.newAnchorData {
                             defaults.set(newAnchorData, forKey: Self.anchorPrefix + page.typeIdentifier)
                         }
-                        if pendingBatch.isEmpty, let sweepOffset {
+                        if page.hitPageLimit {
+                            var canDrain = true
+                            if !pendingBatch.isEmpty {
+                                let batchTypes = pendingBatch.typeIdentifiers
+                                let flushOutcome = await flushPendingBatch(
+                                    &pendingBatch,
+                                    syncEngine: syncEngine,
+                                    serverURL: url,
+                                    apiKey: apiKey,
+                                    deviceId: deviceId,
+                                    transport: transport,
+                                    timeout: uploadTimeout
+                                )
+                                switch flushOutcome {
+                                case .cancelled:
+                                    isCancelled = true
+                                    canDrain = false
+                                case .failed:
+                                    failedTypes.append(contentsOf: batchTypes)
+                                case .databaseLocked:
+                                    wasDatabaseLocked = true
+                                    canDrain = false
+                                case .success:
+                                    break
+                                }
+                            }
+                            if canDrain {
+                                let drainOutcome = await exhaustQuery(
+                                    for: allTypes[page.originalIndex],
+                                    syncEngine: syncEngine,
+                                    serverURL: url,
+                                    apiKey: apiKey,
+                                    deviceId: deviceId,
+                                    transport: transport,
+                                    timeout: uploadTimeout,
+                                    limit: pageLimit
+                                )
+                                switch drainOutcome {
+                                case .success:
+                                    commitExhaustOutcome(drainOutcome, nextSweepOffset: sweepOffset)
+                                case .failed:
+                                    failedTypes.append(page.typeIdentifier)
+                                case .cancelled:
+                                    isCancelled = true
+                                case .databaseLocked:
+                                    wasDatabaseLocked = true
+                                }
+                            }
+                        } else if pendingBatch.isEmpty, let sweepOffset {
                             defaults.set(sweepOffset, forKey: Self.sweepOffsetKey)
                         }
                         continue
@@ -947,7 +1028,8 @@ final class HealthQueryManager: ObservableObject {
                         deletedUuids: page.deletedUuids,
                         newAnchorData: page.newAnchorData,
                         tokenPart: page.tokenPart,
-                        nextSweepOffset: sweepOffset
+                        nextSweepOffset: sweepOffset,
+                        hitPageLimit: page.hitPageLimit
                     )
 
                     // If this type filled a full page, flush its first page now so its anchor
@@ -983,9 +1065,7 @@ final class HealthQueryManager: ObservableObject {
                             )
                             switch drainOutcome {
                             case .success:
-                                if let sweepOffset {
-                                    defaults.set(sweepOffset, forKey: Self.sweepOffsetKey)
-                                }
+                                commitExhaustOutcome(drainOutcome, nextSweepOffset: sweepOffset)
                             case .failed:
                                 failedTypes.append(page.typeIdentifier)
                             case .cancelled:

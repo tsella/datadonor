@@ -58,13 +58,13 @@ struct Energy7dSummary: Equatable, Sendable, Codable {
         let todayStart = calendar.startOfDay(for: now)
 
         var normalizedBasal: [Date: Double] = [:]
-        for (date, value) in dailyBasal where value > 0 {
+        for (date, value) in dailyBasal where value.isFinite && value > 0 {
             let day = calendar.startOfDay(for: date)
             normalizedBasal[day, default: 0] += value
         }
 
         var normalizedActive: [Date: Double] = [:]
-        for (date, value) in dailyActive where value > 0 {
+        for (date, value) in dailyActive where value.isFinite && value > 0 {
             let day = calendar.startOfDay(for: date)
             normalizedActive[day, default: 0] += value
         }
@@ -395,5 +395,6 @@ struct EnergyCardView: View {
                 }
             )
         }
+        .disableChartAxisAnimations()
     }
 }

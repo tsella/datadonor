@@ -1197,4 +1197,638 @@ final class StateMachineRegressionTests: XCTestCase {
         let outcome = await manager.performSync(syncEngine: engine, serverURL: serverURL, apiKey: "")
         XCTAssertEqual(outcome, .skipped)
     }
+
+    func testCardioFitness30dSummaryAveragesPerDayComputesDeltaAndPreferredMetric() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = Date(timeIntervalSince1970: 1_760_000_000)
+
+        let vo2Samples = [
+            // Outside 30-day window -> must be ignored
+            TimedQuantitySample(date: now.addingTimeInterval(-35 * 86_400), value: 39.0),
+            // Day -20: two readings on the same day -> averaged to 45.0
+            TimedQuantitySample(date: now.addingTimeInterval(-20 * 86_400 - 3600), value: 44.0),
+            TimedQuantitySample(date: now.addingTimeInterval(-20 * 86_400), value: 46.0),
+            // Day -2: latest 47.4
+            TimedQuantitySample(date: now.addingTimeInterval(-2 * 86_400), value: 47.4)
+        ]
+        let hrrSamples = [
+            TimedQuantitySample(date: now.addingTimeInterval(-10 * 86_400), value: 28),
+            TimedQuantitySample(date: now.addingTimeInterval(-1 * 86_400), value: 36)
+        ]
+        let walkingSamples = [
+            TimedQuantitySample(date: now.addingTimeInterval(-15 * 86_400), value: 98),
+            TimedQuantitySample(date: now.addingTimeInterval(-3 * 86_400), value: 92)
+        ]
+
+        let summary = CardioFitness30dSummary.build(
+            vo2Max30d: vo2Samples,
+            heartRateRecovery30d: hrrSamples,
+            walkingHeartRate30d: walkingSamples,
+            windowEnd: now,
+            calendar: calendar
+        )
+
+        XCTAssertTrue(summary.hasAnyData)
+        XCTAssertEqual(summary.preferredMetric, .vo2Max)
+        XCTAssertEqual(summary.vo2Max.points.count, 2)
+        XCTAssertEqual(summary.vo2Max.latest ?? 0, 47.4, accuracy: 0.01)
+        XCTAssertEqual(summary.vo2Max.average ?? 0, 46.2, accuracy: 0.01)
+        XCTAssertEqual(summary.vo2Max.delta ?? 0, 2.4, accuracy: 0.01)
+
+        XCTAssertEqual(summary.heartRateRecovery.latest ?? 0, 36, accuracy: 0.01)
+        XCTAssertEqual(summary.heartRateRecovery.delta ?? 0, 8, accuracy: 0.01)
+
+        XCTAssertEqual(summary.walkingHeartRate.latest ?? 0, 92, accuracy: 0.01)
+        XCTAssertEqual(summary.walkingHeartRate.delta ?? 0, -6, accuracy: 0.01)
+
+        // Binary-search nearestPoint picks the closest measurement day.
+        let nearFirst = summary.vo2Max.nearestPoint(to: now.addingTimeInterval(-18 * 86_400))
+        XCTAssertEqual(nearFirst?.value ?? 0, 45.0, accuracy: 0.01)
+
+        // Falls back to HRR when VO2 Max is absent.
+        let hrrOnly = CardioFitness30dSummary.build(
+            vo2Max30d: [],
+            heartRateRecovery30d: hrrSamples,
+            walkingHeartRate30d: [],
+            windowEnd: now,
+            calendar: calendar
+        )
+        XCTAssertEqual(hrrOnly.preferredMetric, .heartRateRecovery)
+    }
+
+    func testOvernightVitals7dSummaryDetectsOutliersNormalizesSpO2AndComputesWatchStatus() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let baseDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_760_500_000))
+        let now = baseDay.addingTimeInterval(10 * 3600) // 10:00 UTC, after 04:00 UTC overnight readings
+        let todayStart = calendar.startOfDay(for: now)
+
+        func day(_ offset: Int) -> Date {
+            calendar.date(byAdding: .day, value: offset, to: todayStart)!.addingTimeInterval(4 * 3600)
+        }
+
+        // Steady 10-day personal baseline
+        let baselineTemp = (-10 ... -1).map { TimedQuantitySample(date: day($0), value: 36.2) }
+        let baselineResp = (-10 ... -1).map { TimedQuantitySample(date: day($0), value: 14.2) }
+        let baselineSpO2 = (-10 ... -1).map { TimedQuantitySample(date: day($0), value: 0.98) } // HealthKit 0..1 fraction
+
+        // Case 1: All vitals inside baseline -> .typical
+        let typical = OvernightVitals7dSummary.build(
+            wristTemp14d: baselineTemp + [TimedQuantitySample(date: day(0), value: 36.3)],
+            respiratoryRate14d: baselineResp + [TimedQuantitySample(date: day(0), value: 14.5)],
+            bloodOxygen14d: baselineSpO2 + [TimedQuantitySample(date: day(0), value: 0.975)],
+            now: now,
+            calendar: calendar
+        )
+        XCTAssertEqual(typical.watchStatus, .typical)
+        XCTAssertEqual(typical.latestOutlierCount, 0)
+        XCTAssertEqual(typical.availableChannelCount, 3)
+        XCTAssertEqual(typical.displayKinds, [.wristTemp, .respiratoryRate, .bloodOxygen])
+        XCTAssertEqual(typical.bloodOxygen.latest?.value ?? 0, 97.5, accuracy: 0.1)
+        XCTAssertEqual(typical.wristTemp.points.count, 7)
+
+        // Case 2: Multi-signal illness watch (elevated temp +0.7°C & elevated resp +2.6 br/m & SpO2 drop to 93%)
+        let elevated = OvernightVitals7dSummary.build(
+            wristTemp14d: baselineTemp + [TimedQuantitySample(date: day(0), value: 36.9)],
+            respiratoryRate14d: baselineResp + [TimedQuantitySample(date: day(0), value: 16.8)],
+            bloodOxygen14d: baselineSpO2 + [TimedQuantitySample(date: day(0), value: 0.93)],
+            breathingDisturbances14d: [TimedQuantitySample(date: day(0), value: 3.0)],
+            now: now,
+            calendar: calendar
+        )
+        XCTAssertEqual(elevated.watchStatus, .elevated)
+        XCTAssertEqual(elevated.latestOutlierCount, 3)
+        XCTAssertEqual(elevated.wristTemp.latest?.outlierState, .high)
+        XCTAssertEqual(elevated.respiratoryRate.latest?.outlierState, .high)
+        XCTAssertEqual(elevated.bloodOxygen.latest?.outlierState, .low)
+        XCTAssertEqual(elevated.displayKinds.count, 4, "Includes breathing disturbances when present")
+        XCTAssertTrue(elevated.series(for: elevated.preferredKind).isLatestOutlier)
+    }
+
+    func testGaitBiomechanics30dSummaryClassifiesZonesNormalizesUnitsAndComputesInclination() {
+        let now = Date()
+        let earlier = now.addingTimeInterval(-14 * 86_400)
+        let recent = now.addingTimeInterval(-2 * 86_400)
+
+        // Healthy balanced gait (HealthKit fractional percentages and meters)
+        let balanced = GaitBiomechanics30dSummary.build(
+            walkingSpeed30d: [
+                TimedQuantitySample(date: earlier, value: 1.32),
+                TimedQuantitySample(date: recent, value: 1.42)
+            ],
+            stepLength30d: [
+                TimedQuantitySample(date: earlier, value: 0.70),
+                TimedQuantitySample(date: recent, value: 0.74)
+            ],
+            asymmetry30d: [TimedQuantitySample(date: recent, value: 0.015)],
+            doubleSupport30d: [TimedQuantitySample(date: recent, value: 0.27)],
+            steadiness30d: [TimedQuantitySample(date: recent, value: 0.92)],
+            windowEnd: now
+        )
+        XCTAssertTrue(balanced.hasAnyData)
+        XCTAssertEqual(balanced.overallTier, .optimal)
+        XCTAssertEqual(balanced.availableMetricCount, 5)
+        XCTAssertEqual(balanced.stepLength.formattedValue, "74 cm")
+        XCTAssertEqual(balanced.asymmetry.formattedValue, "1.5%")
+        XCTAssertEqual(balanced.steadiness.formattedValue, "92%")
+        XCTAssertEqual(balanced.doubleSupport.formattedValue, "27%")
+        XCTAssertLessThan(balanced.visualInclination, 0.20)
+        // 30-day trendlines for walkingSpeed (m/s) and walkingStepLength (cm)
+        XCTAssertEqual(balanced.speedSeries.points.count, 2)
+        XCTAssertEqual(balanced.speedSeries.delta ?? 0, 0.10, accuracy: 0.001)
+        XCTAssertEqual(balanced.stepLengthSeries.points.count, 2)
+        XCTAssertEqual(balanced.stepLengthSeries.delta ?? 0, 4.0, accuracy: 0.01)
+
+        // Asymmetric / guarded gait -> caution tier & pronounced visual inclination
+        let strained = GaitBiomechanics30dSummary.build(
+            walkingSpeed30d: [TimedQuantitySample(date: recent, value: 0.92)],
+            stepLength30d: [TimedQuantitySample(date: recent, value: 0.48)],
+            asymmetry30d: [TimedQuantitySample(date: recent, value: 0.085)],
+            doubleSupport30d: [TimedQuantitySample(date: recent, value: 0.36)],
+            steadiness30d: [TimedQuantitySample(date: recent, value: 0.45)],
+            windowEnd: now
+        )
+        XCTAssertEqual(strained.overallTier, .caution)
+        XCTAssertEqual(strained.asymmetry.tier, .caution)
+        XCTAssertEqual(strained.steadiness.tier, .caution)
+        XCTAssertEqual(strained.speed.tier, .caution)
+        XCTAssertEqual(strained.stepLength.tier, .caution)
+        XCTAssertEqual(strained.doubleSupport.tier, .caution)
+        XCTAssertGreaterThan(strained.visualInclination, 0.75)
+    }
+
+    @MainActor
+    func testIssue9_SupersededVitalsRefreshDoesNotClearIsLoadingWhileNewerFetchInFlight() async {
+        let tempCacheURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vitals-gen-cache-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tempCacheURL) }
+
+        final class GateBox: @unchecked Sendable {
+            private let lock = NSLock()
+            var callCount = 0
+            var firstStarted: XCTestExpectation?
+            var secondStarted: XCTestExpectation?
+            var firstContinuation: CheckedContinuation<HealthVitalsSnapshot, Error>?
+            var secondContinuation: CheckedContinuation<HealthVitalsSnapshot, Error>?
+
+            func register(_ cont: CheckedContinuation<HealthVitalsSnapshot, Error>) {
+                lock.lock()
+                callCount += 1
+                let idx = callCount
+                if idx == 1 {
+                    firstContinuation = cont
+                    firstStarted?.fulfill()
+                } else if idx == 2 {
+                    secondContinuation = cont
+                    secondStarted?.fulfill()
+                }
+                lock.unlock()
+            }
+
+            func finishFirst(throwing error: Error) {
+                lock.lock()
+                let cont = firstContinuation
+                firstContinuation = nil
+                lock.unlock()
+                cont?.resume(throwing: error)
+            }
+
+            func finishSecond(returning snapshot: HealthVitalsSnapshot) {
+                lock.lock()
+                let cont = secondContinuation
+                secondContinuation = nil
+                lock.unlock()
+                cont?.resume(returning: snapshot)
+            }
+        }
+
+        let gate = GateBox()
+        let firstStarted = expectation(description: "gen 1 started")
+        let secondStarted = expectation(description: "gen 2 started")
+        gate.firstStarted = firstStarted
+        gate.secondStarted = secondStarted
+
+        let cache = VitalsSnapshotCache(fileURL: tempCacheURL)
+        let store = HealthVitalsStore(cache: cache, fetcher: { _ in
+            try await withCheckedThrowingContinuation { cont in
+                gate.register(cont)
+            }
+        })
+
+        // Start generation #1 on an empty cache -> isLoading becomes true.
+        store.refresh(healthStore: HKHealthStore(), isAuthorized: true)
+        await fulfillment(of: [firstStarted], timeout: 2.0)
+        XCTAssertTrue(store.isLoading)
+
+        // Supersede with generation #2 before generation #1 finishes.
+        store.refresh(healthStore: HKHealthStore(), isAuthorized: true)
+        await fulfillment(of: [secondStarted], timeout: 2.0)
+        XCTAssertTrue(store.isLoading)
+
+        // Generation #1 now exits (cancelled/throwing) while generation #2 is STILL in flight.
+        gate.finishFirst(throwing: CancellationError())
+        await Task.yield()
+        await Task.yield()
+
+        // Invariant: superseded generation #1's defer MUST NOT clear isLoading for generation #2.
+        XCTAssertTrue(store.isLoading, "Superseded refresh must not clear isLoading while newer fetch is active")
+
+        // When generation #2 completes, snapshot applies and isLoading drops to false.
+        let now = Date()
+        let snapshot = HealthVitalsSnapshot.build(
+            heartRate24h: [HeartRateSamplePoint(date: now.addingTimeInterval(-300), bpm: 64)],
+            rhr14d: [],
+            hrv14d: [],
+            sleep36h: [],
+            wristTemp14d: [],
+            windowEnd: now
+        )
+        gate.finishSecond(returning: snapshot)
+        for _ in 0..<20 where store.isLoading {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertFalse(store.isLoading)
+        XCTAssertEqual(store.heartRate, snapshot.heartRate)
+    }
+
+    func testIssue9_VitalsSnapshotCacheRejectsFarFutureClockSkewedSnapshots() {
+        let tempCacheURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vitals-skew-cache-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tempCacheURL) }
+
+        let now = Date()
+        let snapshot = HealthVitalsSnapshot.build(
+            heartRate24h: [HeartRateSamplePoint(date: now.addingTimeInterval(-60), bpm: 70)],
+            rhr14d: [],
+            hrv14d: [],
+            sleep36h: [],
+            wristTemp14d: [],
+            windowEnd: now
+        )
+        let cache = VitalsSnapshotCache(fileURL: tempCacheURL, maxAge: 48 * 3600)
+
+        // Far-future cachedAt (2 hours ahead of current clock) must be rejected.
+        cache.save(snapshot, now: now.addingTimeInterval(2 * 3600))
+        XCTAssertNil(cache.load(now: now))
+
+        // Small NTP drift (2 minutes ahead) is still accepted cleanly.
+        cache.save(snapshot, now: now.addingTimeInterval(120))
+        XCTAssertEqual(cache.load(now: now), snapshot)
+    }
+
+    func testIssue10_SyncEngineCheckConnectionRejectsEmptyApiKeyWithoutNetwork() async {
+        let engine = SyncEngine(sessionIdentifier: "test-check-conn", createBackgroundSession: false)
+        let unreachableURL = URL(string: "https://127.0.0.1:1")!
+        let result = await engine.checkConnection(url: unreachableURL, apiKey: "   \n  ")
+        XCTAssertEqual(result, .unauthorized)
+    }
+
+    func testChartSummariesFilterNonFiniteValuesAndClampDomains() {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        // Early-morning timestamp (01:30 UTC) to verify daily noon points clamp inside windowStart...windowEnd.
+        let morningNow = utc.date(from: DateComponents(year: 2026, month: 11, day: 24, hour: 1, minute: 30))!
+
+        // HeartRate: NaN/inf samples dropped, edge bucket date clamped inside window.
+        let hr = HeartRate24hSummary.build(
+            samples: [
+                HeartRateSamplePoint(date: morningNow.addingTimeInterval(-600), bpm: .nan),
+                HeartRateSamplePoint(date: morningNow.addingTimeInterval(-300), bpm: .infinity),
+                HeartRateSamplePoint(date: morningNow, bpm: 66)
+            ],
+            restingHeartRateBPM: 58,
+            hrvSamples24h: [52],
+            fallbackHRV: nil,
+            windowEnd: morningNow
+        )
+        XCTAssertEqual(hr.buckets.count, 1)
+        XCTAssertLessThanOrEqual(hr.buckets[0].date, hr.windowEnd)
+        XCTAssertGreaterThanOrEqual(hr.buckets[0].date, hr.windowStart)
+        XCTAssertTrue(hr.yAxisDomain.lowerBound.isFinite && hr.yAxisDomain.upperBound.isFinite)
+
+        // CardioFitness: NaN/inf filtered, morning sample clamped to <= windowEnd.
+        let cardio = CardioFitness30dSummary.build(
+            vo2Max30d: [
+                TimedQuantitySample(date: morningNow.addingTimeInterval(-1800), value: .nan),
+                TimedQuantitySample(date: morningNow.addingTimeInterval(-900), value: 47.2)
+            ],
+            heartRateRecovery30d: [],
+            walkingHeartRate30d: [],
+            windowEnd: morningNow,
+            calendar: utc
+        )
+        XCTAssertEqual(cardio.vo2Max.points.count, 1)
+        XCTAssertLessThanOrEqual(cardio.vo2Max.points[0].date, cardio.windowEnd)
+        XCTAssertGreaterThanOrEqual(cardio.vo2Max.points[0].date, cardio.windowStart)
+
+        // OvernightVitals: extreme outlier baseline never produces inverted typicalRange, NaN ignored.
+        let overnight = OvernightVitals7dSummary.build(
+            wristTemp14d: [TimedQuantitySample(date: morningNow.addingTimeInterval(-3600), value: .nan)],
+            respiratoryRate14d: [TimedQuantitySample(date: morningNow.addingTimeInterval(-3600), value: 2.0)],
+            bloodOxygen14d: [TimedQuantitySample(date: morningNow.addingTimeInterval(-3600), value: 0.70)],
+            now: morningNow,
+            calendar: utc
+        )
+        XCTAssertTrue(overnight.wristTemp.isEmpty)
+        if let respRange = overnight.respiratoryRate.typicalRange {
+            XCTAssertLessThanOrEqual(respRange.lowerBound, respRange.upperBound)
+        }
+        if let spo2Range = overnight.bloodOxygen.typicalRange {
+            XCTAssertLessThanOrEqual(spo2Range.lowerBound, spo2Range.upperBound)
+        }
+
+        // Energy: NaN/inf ignored.
+        let energy = Energy7dSummary.build(
+            dailyBasal: [morningNow: .nan],
+            dailyActive: [morningNow: .infinity],
+            now: morningNow,
+            calendar: utc
+        )
+        XCTAssertFalse(energy.hasAnyData)
+        XCTAssertTrue(energy.yAxisDomain.upperBound.isFinite)
+
+        // Gait: NaN/inf filtered, visualInclination stays finite in 0...1.
+        let gait = GaitBiomechanics30dSummary.build(
+            walkingSpeed30d: [TimedQuantitySample(date: morningNow.addingTimeInterval(-600), value: .nan)],
+            stepLength30d: [TimedQuantitySample(date: morningNow.addingTimeInterval(-600), value: .infinity)],
+            asymmetry30d: [TimedQuantitySample(date: morningNow.addingTimeInterval(-600), value: 0.04)],
+            doubleSupport30d: [],
+            steadiness30d: [TimedQuantitySample(date: morningNow.addingTimeInterval(-600), value: .nan)],
+            windowEnd: morningNow
+        )
+        XCTAssertTrue(gait.visualInclination.isFinite)
+        XCTAssertGreaterThanOrEqual(gait.visualInclination, 0.0)
+        XCTAssertLessThanOrEqual(gait.visualInclination, 1.0)
+    }
+
+    // MARK: - Audit Issue #4 (P0): Workout active energy extraction without deprecated totalEnergyBurned
+
+    func testAuditIssue4_WorkoutActiveEnergyHelperConvertsUnitsAndRejectsInvalidQuantities() {
+        let kcalQty = HKQuantity(unit: .kilocalorie(), doubleValue: 325.5)
+        XCTAssertEqual(
+            HealthQueryManager.workoutActiveEnergyKilocalories(activeEnergyQuantity: kcalQty) ?? -1,
+            325.5,
+            accuracy: 0.001
+        )
+
+        // 4184 J == 1 kcal
+        let jouleQty = HKQuantity(unit: .joule(), doubleValue: 4184.0)
+        XCTAssertEqual(
+            HealthQueryManager.workoutActiveEnergyKilocalories(activeEnergyQuantity: jouleQty) ?? -1,
+            1.0,
+            accuracy: 0.01
+        )
+
+        // Incompatible unit, nil, and non-finite quantities must return nil cleanly.
+        let incompatibleQty = HKQuantity(unit: .meter(), doubleValue: 100.0)
+        XCTAssertNil(HealthQueryManager.workoutActiveEnergyKilocalories(activeEnergyQuantity: incompatibleQty))
+        XCTAssertNil(HealthQueryManager.workoutActiveEnergyKilocalories(activeEnergyQuantity: nil))
+        let nanQty = HKQuantity(unit: .kilocalorie(), doubleValue: .nan)
+        XCTAssertNil(HealthQueryManager.workoutActiveEnergyKilocalories(activeEnergyQuantity: nanQty))
+    }
+
+    // MARK: - Audit Issue #7 (P1): Secondary sweep cursor does not advance before exhaustQuery finishes
+
+    @MainActor
+    func testAuditIssue7_SecondarySweepOffsetDoesNotAdvanceBeforeExhaustQueryCompletes() throws {
+        let defaults = makeIsolatedDefaults()
+        let manager = HealthQueryManager(defaults: defaults)
+
+        let priorType = HKQuantityTypeIdentifier.flightsClimbed.rawValue
+        let pageLimitedType = HKQuantityTypeIdentifier.distanceCycling.rawValue
+        let priorAnchor = try makeArchivedAnchorData(value: 10)
+        let page1Anchor = try makeArchivedAnchorData(value: 20)
+        let dummyPoint = HealthDataPoint(
+            type: pageLimitedType,
+            value: .double(100),
+            unit: "m",
+            startDate: "2026-11-24T00:00:00Z",
+            endDate: "2026-11-24T00:05:00Z",
+            source: "Apple Watch",
+            uuid: UUID().uuidString,
+            metadata: nil
+        )
+
+        // Case 1: Page-limited secondary type alone in batch.
+        var batch1 = PendingMultiTypeBatch()
+        batch1.append(
+            typeIdentifier: pageLimitedType,
+            dataPoints: [dummyPoint],
+            deletedUuids: [],
+            newAnchorData: page1Anchor,
+            tokenPart: "tok-1",
+            nextSweepOffset: 4,
+            hitPageLimit: true
+        )
+        XCTAssertNil(batch1.nextSweepOffset, "Page-limited type must not schedule sweep offset on page-1 flush")
+
+        manager.commitFlushedBatch(anchors: batch1.anchors, nextSweepOffset: batch1.nextSweepOffset)
+        // Page-1 anchor IS persisted so page 1 is not re-uploaded, while sweep cursor stays at 0.
+        XCTAssertEqual(defaults.data(forKey: "anchor_\(pageLimitedType)"), page1Anchor)
+        XCTAssertEqual(manager.currentSweepOffset, 0)
+
+        // Mid-pagination failure, cancellation, or database lock must NOT advance sweep cursor.
+        manager.commitExhaustOutcome(.failed, nextSweepOffset: 4)
+        XCTAssertEqual(manager.currentSweepOffset, 0)
+        manager.commitExhaustOutcome(.cancelled, nextSweepOffset: 4)
+        XCTAssertEqual(manager.currentSweepOffset, 0)
+        manager.commitExhaustOutcome(.databaseLocked, nextSweepOffset: 4)
+        XCTAssertEqual(manager.currentSweepOffset, 0)
+
+        // Only a clean exhaustQuery completion advances sweep cursor past the page-limited type.
+        manager.commitExhaustOutcome(.success, nextSweepOffset: 4)
+        XCTAssertEqual(manager.currentSweepOffset, 4)
+
+        // Case 2: Earlier completed secondary type (offset -> 3) bundled with page-limited type (offset -> 4).
+        defaults.set(2, forKey: "nextTypeSweepOffset")
+        var batch2 = PendingMultiTypeBatch()
+        batch2.append(
+            typeIdentifier: priorType,
+            dataPoints: [dummyPoint],
+            deletedUuids: [],
+            newAnchorData: priorAnchor,
+            tokenPart: "tok-prior",
+            nextSweepOffset: 3,
+            hitPageLimit: false
+        )
+        batch2.append(
+            typeIdentifier: pageLimitedType,
+            dataPoints: [dummyPoint],
+            deletedUuids: [],
+            newAnchorData: page1Anchor,
+            tokenPart: "tok-limited",
+            nextSweepOffset: 4,
+            hitPageLimit: true
+        )
+        // Batch keeps offset 3 (pointing AT the page-limited type), NOT 4 (past it).
+        XCTAssertEqual(batch2.nextSweepOffset, 3)
+
+        manager.commitFlushedBatch(anchors: batch2.anchors, nextSweepOffset: batch2.nextSweepOffset)
+        XCTAssertEqual(defaults.data(forKey: "anchor_\(priorType)"), priorAnchor)
+        XCTAssertEqual(defaults.data(forKey: "anchor_\(pageLimitedType)"), page1Anchor)
+        XCTAssertEqual(manager.currentSweepOffset, 3)
+
+        manager.commitExhaustOutcome(.failed, nextSweepOffset: 4)
+        XCTAssertEqual(manager.currentSweepOffset, 3)
+
+        manager.commitExhaustOutcome(.success, nextSweepOffset: 4)
+        XCTAssertEqual(manager.currentSweepOffset, 4)
+    }
+
+    // MARK: - Audit Issue #8 (P1): ServerResolver.saveApiKey surfaces Keychain write failures
+
+    func testAuditIssue8_ServerResolverSaveApiKeyReportsKeychainFailuresAndPreservesLegacyOnFailure() {
+        let defaults = makeIsolatedDefaults()
+        defaults.set("legacy-secret", forKey: "apiKey")
+
+        // Delete failure returns false, skips add, and preserves legacy UserDefaults copy.
+        var addCalled = false
+        let deleteFailed = ServerResolver.saveApiKey(
+            "new-secret",
+            deleteItem: { _ in errSecInteractionNotAllowed },
+            addItem: { _ in
+                addCalled = true
+                return errSecSuccess
+            },
+            defaults: defaults
+        )
+        XCTAssertFalse(deleteFailed)
+        XCTAssertFalse(addCalled)
+        XCTAssertEqual(defaults.string(forKey: "apiKey"), "legacy-secret")
+
+        // Add failure returns false and preserves legacy UserDefaults copy.
+        let addFailed = ServerResolver.saveApiKey(
+            "new-secret",
+            deleteItem: { _ in errSecItemNotFound },
+            addItem: { _ in errSecAuthFailed },
+            defaults: defaults
+        )
+        XCTAssertFalse(addFailed)
+        XCTAssertEqual(defaults.string(forKey: "apiKey"), "legacy-secret")
+
+        // Successful write (with errSecItemNotFound on delete) returns true and removes legacy copy.
+        var storedPayload: Data?
+        let saved = ServerResolver.saveApiKey(
+            "  new-secret\n",
+            deleteItem: { _ in errSecItemNotFound },
+            addItem: { query in
+                let dict = query as NSDictionary
+                storedPayload = dict[kSecValueData] as? Data
+                return errSecSuccess
+            },
+            defaults: defaults
+        )
+        XCTAssertTrue(saved)
+        XCTAssertEqual(storedPayload, Data("new-secret".utf8))
+        XCTAssertNil(defaults.string(forKey: "apiKey"))
+
+        // Clearing an empty key reports delete failure, and succeeds on errSecSuccess/errSecItemNotFound.
+        XCTAssertFalse(
+            ServerResolver.saveApiKey(
+                "   ",
+                deleteItem: { _ in errSecInteractionNotAllowed },
+                addItem: { _ in XCTFail("addItem must not run for empty key"); return errSecSuccess },
+                defaults: defaults
+            )
+        )
+        XCTAssertTrue(
+            ServerResolver.saveApiKey(
+                "   ",
+                deleteItem: { _ in errSecItemNotFound },
+                addItem: { _ in XCTFail("addItem must not run for empty key"); return errSecSuccess },
+                defaults: defaults
+            )
+        )
+    }
+
+    // MARK: - Audit Issue #12 (P2): LogLevel ordering without force-unwraps & LogViewer cancellation/filtering
+
+    func testAuditIssue12_LogLevelOrderingAndLogViewerFilteringAndCancellation() async {
+        // Verify strict total ordering across all cases via severityRank (no dictionary force-unwraps).
+        let expectedOrder: [LogLevel] = [.debug, .info, .warn, .error]
+        XCTAssertEqual(LogLevel.allCases.sorted(), expectedOrder)
+        for i in expectedOrder.indices {
+            XCTAssertFalse(expectedOrder[i] < expectedOrder[i])
+            for j in expectedOrder.indices where i < j {
+                XCTAssertTrue(expectedOrder[i] < expectedOrder[j])
+                XCTAssertFalse(expectedOrder[j] < expectedOrder[i])
+            }
+        }
+
+        let rawLines = [
+            "[DEBUG] [2026-11-24 01:00:00.000] Starting sweep",
+            "malformed line without brackets",
+            "[WARN] [2026-11-24 01:00:01.000] Slow network response",
+            "[ERROR] [2026-11-24 01:00:02.000] Sync failed for stepCount"
+        ]
+        let parsed = LogViewer.parseLines(rawLines)
+        XCTAssertEqual(parsed.count, 3)
+        // Reversed newest-first
+        XCTAssertEqual(parsed[0].level, .error)
+        XCTAssertEqual(parsed[0].timestamp, "2026-11-24 01:00:02.000")
+        XCTAssertEqual(parsed[0].message, "Sync failed for stepCount")
+        XCTAssertEqual(parsed[2].level, .debug)
+
+        // Filtering respects level toggles and case-insensitive search.
+        let errorsOnly = LogViewer.filterEntries(
+            parsed,
+            searchText: "stepcount",
+            showDebug: false,
+            showInfo: false,
+            showWarn: false,
+            showError: true
+        )
+        XCTAssertEqual(errorsOnly.count, 1)
+        XCTAssertEqual(errorsOnly[0].level, .error)
+
+        let noDebug = LogViewer.filterEntries(
+            parsed,
+            searchText: "",
+            showDebug: false,
+            showInfo: true,
+            showWarn: true,
+            showError: true
+        )
+        XCTAssertEqual(noDebug.count, 2)
+
+        // Cancelled task aborts parseLines cleanly without returning stale results.
+        let cancelledTask = Task { () -> [LogEntry] in
+            // Wait until cancelled before running parseLines.
+            while !Task.isCancelled {
+                await Task.yield()
+            }
+            return LogViewer.parseLines(rawLines)
+        }
+        cancelledTask.cancel()
+        let cancelledResult = await cancelledTask.value
+        XCTAssertTrue(cancelledResult.isEmpty)
+    }
+
+    // MARK: - Audit Issue #15 (P3): Readiness score ring avoids zero-span AngularGradient
+
+    func testAuditIssue15_ReadinessScoreRingNeverUsesZeroSpanAngularGradient() {
+        // Score 0 and negative scores have 0 progress and a strictly positive gradient span (>= 1 deg).
+        XCTAssertEqual(ReadinessCardView.scoreRingProgress(for: 0), 0.0)
+        XCTAssertEqual(ReadinessCardView.scoreRingProgress(for: -15), 0.0)
+        XCTAssertGreaterThanOrEqual(ReadinessCardView.scoreRingGradientEndDegrees(for: 0), 1.0)
+        XCTAssertGreaterThanOrEqual(ReadinessCardView.scoreRingGradientEndDegrees(for: -15), 1.0)
+
+        // Positive scores map linearly and clamp at 100.
+        XCTAssertEqual(ReadinessCardView.scoreRingProgress(for: 50), 0.5, accuracy: 0.0001)
+        XCTAssertEqual(ReadinessCardView.scoreRingGradientEndDegrees(for: 50), 180.0, accuracy: 0.0001)
+        XCTAssertEqual(ReadinessCardView.scoreRingProgress(for: 100), 1.0, accuracy: 0.0001)
+        XCTAssertEqual(ReadinessCardView.scoreRingGradientEndDegrees(for: 100), 360.0, accuracy: 0.0001)
+        XCTAssertEqual(ReadinessCardView.scoreRingGradientEndDegrees(for: 140), 360.0, accuracy: 0.0001)
+
+        // Instantiating ReadinessCardView with score == 0 succeeds cleanly.
+        let zeroSummary = ReadinessSummary(
+            score: 0,
+            tier: .recover,
+            insight: "Rest today.",
+            factors: []
+        )
+        let card = ReadinessCardView(summary: zeroSummary, isAuthorized: true, isLoading: false)
+        XCTAssertEqual(card.summary?.score, 0)
+    }
 }

@@ -53,16 +53,24 @@ enum SplashWaveformMath {
 /// 3. Smoothly dissolves out once the choreography finishes and cached/initial vitals are ready,
 ///    then removes itself completely from the view hierarchy (0% ongoing CPU/GPU cost).
 struct SplashScreenView: View {
+    enum SplashPhase: Equatable {
+        case animating
+        case dismissing
+        case finished
+    }
+
     let isReady: Bool
     let onFinished: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @State private var startDate = Date()
     @State private var latestIsReady = false
-    @State private var isDismissing = false
+    @State private var phase: SplashPhase = .animating
     @State private var isExitingVisual = false
     @State private var emblemAppeared = false
     @State private var textAppeared = false
+    @State private var dismissTask: Task<Void, Never>?
 
     /// Shared vertical offset from full-screen center so Canvas focal effects (ECG R-peak,
     /// ripple rings, orbital convergence) align to 0.0pt with the emblem medallion center.
@@ -106,8 +114,17 @@ struct SplashScreenView: View {
         .onAppear {
             latestIsReady = isReady
         }
-        .onChange(of: isReady) { newValue in
+        .onChange(of: isReady) { _, newValue in
             latestIsReady = newValue
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .background {
+                finishImmediately()
+            }
+        }
+        .onDisappear {
+            dismissTask?.cancel()
+            dismissTask = nil
         }
         .onTapGesture {
             triggerDismiss()
@@ -119,6 +136,7 @@ struct SplashScreenView: View {
                 emblemAppeared = true
                 textAppeared = true
                 try? await Task.sleep(nanoseconds: 550_000_000)
+                guard !Task.isCancelled else { return }
                 triggerDismiss()
                 return
             }
@@ -135,9 +153,10 @@ struct SplashScreenView: View {
             // load is still in flight (capped at 2.0s total so launch never feels stuck).
             try? await Task.sleep(nanoseconds: 1_350_000_000)
             let deadline = Date().addingTimeInterval(0.65)
-            while !latestIsReady && Date() < deadline && !Task.isCancelled && !isDismissing {
+            while !latestIsReady && Date() < deadline && !Task.isCancelled && phase == .animating {
                 try? await Task.sleep(nanoseconds: 50_000_000)
             }
+            guard !Task.isCancelled else { return }
             triggerDismiss()
         }
         .accessibilityElement(children: .combine)
@@ -147,7 +166,7 @@ struct SplashScreenView: View {
     // MARK: - Animated 120Hz Path
 
     private var animatedContent: some View {
-        TimelineView(.animation(minimumInterval: nil, paused: isDismissing)) { timeline in
+        TimelineView(.animation(minimumInterval: nil, paused: phase != .animating || scenePhase != .active)) { timeline in
             let t = max(0, timeline.date.timeIntervalSince(startDate))
             let beatScale = SplashWaveformMath.lubDubScale(at: t)
             let ringRotation = Angle.degrees(t * 95)
@@ -155,6 +174,7 @@ struct SplashScreenView: View {
             ZStack {
                 // Single-pass GPU Canvas for ambient aura, ECG pulse sweep, ripples, and converging nodes.
                 Canvas(opaque: false, rendersAsynchronously: true) { context, size in
+                    guard size.width > 0, size.height > 0, size.width.isFinite, size.height.isFinite else { return }
                     drawAtmosphericBackdrop(in: &context, size: size, t: t)
                     drawECGWaveform(in: &context, size: size, t: t)
                     drawPulseRipples(in: &context, size: size, t: t)
@@ -502,14 +522,25 @@ struct SplashScreenView: View {
     // MARK: - Dismissal
 
     private func triggerDismiss() {
-        guard !isDismissing else { return }
-        isDismissing = true
+        guard phase == .animating else { return }
+        phase = .dismissing
         withAnimation(.easeInOut(duration: 0.36)) {
             isExitingVisual = true
         }
-        Task { @MainActor in
+        dismissTask?.cancel()
+        dismissTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 380_000_000)
+            guard !Task.isCancelled, phase == .dismissing else { return }
+            phase = .finished
             onFinished()
         }
+    }
+
+    private func finishImmediately() {
+        guard phase != .finished else { return }
+        phase = .finished
+        dismissTask?.cancel()
+        dismissTask = nil
+        onFinished()
     }
 }

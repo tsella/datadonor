@@ -43,28 +43,69 @@ enum ServerResolver {
         // One-time migration from legacy UserDefaults storage.
         if let legacy = UserDefaults.standard.string(forKey: legacyApiKeyDefaultsKey),
            !legacy.isEmpty {
-            saveApiKey(legacy)
-            UserDefaults.standard.removeObject(forKey: legacyApiKeyDefaultsKey)
+            if saveApiKey(legacy) {
+                UserDefaults.standard.removeObject(forKey: legacyApiKeyDefaultsKey)
+            }
             return legacy
         }
         return ""
     }
 
-    static func saveApiKey(_ newValue: String) {
+    @discardableResult
+    static func saveApiKey(_ newValue: String) -> Bool {
+        saveApiKey(
+            newValue,
+            deleteItem: { SecItemDelete($0) },
+            addItem: { SecItemAdd($0, nil) }
+        )
+    }
+
+    @discardableResult
+    internal static func saveApiKey(
+        _ newValue: String,
+        deleteItem: (CFDictionary) -> OSStatus,
+        addItem: (CFDictionary) -> OSStatus,
+        defaults: UserDefaults = .standard
+    ) -> Bool {
         let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let baseQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
             kSecAttrAccount as String: keychainAccount
         ]
-        SecItemDelete(baseQuery as CFDictionary)
-        UserDefaults.standard.removeObject(forKey: legacyApiKeyDefaultsKey)
+        let deleteStatus = deleteItem(baseQuery as CFDictionary)
+        guard deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound else {
+            DataDonorLogger.shared.log(
+                "Failed to delete existing API key from Keychain (OSStatus \(deleteStatus)).",
+                level: .error
+            )
+            return false
+        }
 
-        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { return }
+        if trimmed.isEmpty {
+            defaults.removeObject(forKey: legacyApiKeyDefaultsKey)
+            return true
+        }
+
+        guard let data = trimmed.data(using: .utf8) else {
+            DataDonorLogger.shared.log("Failed to UTF-8 encode API key for Keychain storage.", level: .error)
+            return false
+        }
+
         var addQuery = baseQuery
         addQuery[kSecValueData as String] = data
         addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        SecItemAdd(addQuery as CFDictionary, nil)
+        let addStatus = addItem(addQuery as CFDictionary)
+        guard addStatus == errSecSuccess else {
+            DataDonorLogger.shared.log(
+                "Failed to save API key to Keychain (OSStatus \(addStatus)).",
+                level: .error
+            )
+            return false
+        }
+
+        defaults.removeObject(forKey: legacyApiKeyDefaultsKey)
+        return true
     }
 
     // MARK: - URL Resolution
