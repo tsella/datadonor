@@ -10,8 +10,8 @@
   <a href="https://github.com/tsella/datadonor/actions/workflows/ci.yml">
     <img src="https://img.shields.io/github/actions/workflow/status/tsella/datadonor/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI" alt="CI Status" />
   </a>
-  <img src="https://img.shields.io/badge/iOS_App-v1.6-0A9F91?style=flat-square&logo=apple&logoColor=white" alt="iOS App v1.6" />
-  <img src="https://img.shields.io/badge/iOS-16.0+-1C1C1E?style=flat-square&logo=ios&logoColor=white" alt="iOS 16.0+" />
+  <img src="https://img.shields.io/badge/iOS_App-v1.7-0A9F91?style=flat-square&logo=apple&logoColor=white" alt="iOS App v1.7" />
+  <img src="https://img.shields.io/badge/iOS-17.0+-1C1C1E?style=flat-square&logo=ios&logoColor=white" alt="iOS 17.0+" />
   <a href="LICENSE">
     <img src="https://img.shields.io/github/license/tsella/datadonor?style=flat-square&color=4E5C9E" alt="MIT License" />
   </a>
@@ -63,14 +63,25 @@ It pairs a native **SwiftUI iOS app** with a lightweight **local Fastify + SQLit
 
 ## On-Device Vitals Dashboard
 
-DataDonor isn't just a headless uploader — the iOS client (`v1.6`) ships with a fast, offline-first biometric dashboard powered by **Swift Charts**, **off-MainActor aggregation**, and **device-lock encrypted snapshot caching** (`NSFileProtectionComplete`):
+DataDonor isn't just a headless uploader — the iOS client (`v1.7`) ships with a fast, offline-first biometric dashboard powered by **Swift Charts**, **off-MainActor aggregation**, and **device-lock encrypted snapshot caching** (`NSFileProtectionComplete`):
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/vitals-strip-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="docs/images/vitals-strip-light.png" />
+    <img src="docs/images/vitals-strip-light.png" alt="DataDonor On-Device Vitals Cards — Heart Rate, Sleep, Readiness, Energy, Overnight Vitals, Cardio Fitness, and Gait &amp; Biomechanics" width="100%" />
+  </picture>
+</p>
 
 | Card | What You See |
 | --- | --- |
 | **Heart Rate (24h)** | Continuous heart-rate curve with 15-minute min–max range bars, dashed **RHR** baseline, **HRV** indicator, shaded **Sleep & Activity** overlay bands, total duration pills, and hold-and-drag scrubbing. |
 | **Sleep Architecture (24h)** | Multi-writer deduplicated hypnogram (**Awake / REM / Core / Deep**) with union-merged intervals (no double-counting across Watch + third-party apps), stage distribution bar, and sleep efficiency. |
+| **Overnight Vitals (7d)** | Early-illness watch comparing **Sleeping Wrist Temp**, **Respiratory Rate**, **SpO₂**, and **Breathing Disturbances** *(iOS 18+)* against your personal 14-day typical band with outlier callouts. |
 | **Daily Readiness (0–100)** | Personal recovery score calibrated against your own rolling **14-day baselines** across HRV, RHR, sleep duration & restorative share, and sleeping wrist temperature. |
 | **Energy (TDEE & Basal)** | 7-day stacked **Basal + Active = TDEE** breakdown using HealthKit's deduplicated `HKStatisticsCollectionQuery`, completed-day average reference line, and day-by-day scrubbing. |
+| **Cardio Fitness (30d)** | 30-day longitudinal trend charts for **VO₂ Max**, **1-Min Heart Rate Recovery**, and **Walking Heart Rate** with rolling averages and period deltas. |
+| **Gait & Biomechanics (30d)** | Interactive color-coded anatomical walking silhouette visualizing **Steadiness**, **Asymmetry**, **Walk Speed**, **Step Length**, and **Double Support**, paired with 30-day speed and step-length trendlines. |
 | **Sync History & Telemetry** | Monthly stacked record breakdown (Heart Rate, Steps, Sleep, Workouts) with category filtering, pinned header with one-tap Sync/Stop, persistent card folding, and a 120Hz GPU-accelerated ECG launch splash. |
 
 ---
@@ -202,13 +213,13 @@ Incoming batches appear in `server/logs/datadonor-*.log` as `Ingested N new metr
 All three components ship with self-contained automated test suites:
 
 ```bash
-# Server: auth, ingest idempotency, gzip limits, bucket rollups
+# Server: 26 tests (auth, ingest validation & idempotency, gzip limits, stats rollups, config perms)
 cd server && npm test
 
-# Dashboard: read-only unit tests against a throwaway SQLite database
+# Dashboard: 15 read-only unit tests (XSS/static security, caching, timezone/offset & workout dedupe)
 cd dashboard && npm test
 
-# iOS Client: 31 state-machine, cache & vitals regression tests (macOS + Xcode)
+# iOS Client: 45 state-machine, cache, sync & vitals regression tests (macOS + Xcode)
 xcodebuild test -project client/DataDonor.xcodeproj -scheme DataDonor \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
 ```
