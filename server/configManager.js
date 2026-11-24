@@ -27,7 +27,12 @@ const DEFAULT_CONFIG = {
 function loadConfig() {
     if (!fs.existsSync(CONFIG_PATH)) {
         console.warn('⚠️ No config.json found. Generating a default configuration file.');
-        fs.writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 2), 'utf-8');
+        fs.writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 2), { encoding: 'utf-8', mode: 0o600 });
+        try {
+            fs.chmodSync(CONFIG_PATH, 0o600);
+        } catch (err) {
+            // Best-effort on filesystems that do not support POSIX chmod.
+        }
         console.warn('⚠️ Please edit config.json to set your api_key and SSL paths, then restart the server.');
         process.exit(1);
     }

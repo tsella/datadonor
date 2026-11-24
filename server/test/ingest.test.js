@@ -219,3 +219,104 @@ test('scope=all reconstructs full archive history for a restored or reinstalled 
   });
   assert.strictEqual(invalidScope.status, 400);
 });
+
+function runSql(file, sql, params = []) {
+  return new Promise((resolve, reject) => {
+    const db = new sqlite3.Database(file, sqlite3.OPEN_READWRITE);
+    db.run(sql, params, function (err) {
+      db.close();
+      if (err) reject(err);
+      else resolve(this);
+    });
+  });
+}
+
+test('impossible calendar ISO dates are rejected with 400 on ingest', async () => {
+  for (const badDate of [
+    '2026-99-99T00:00:00Z',
+    '2026-02-31T00:00:00Z',
+    '2026-02-29T00:00:00Z',
+    '2026-04-31T12:00:00Z',
+    '2026-10-17T25:00:00Z',
+  ]) {
+    const badStart = samplePayload('device-bad-dates');
+    badStart.data[0].start_date = badDate;
+    const resStart = await post(badStart);
+    assert.strictEqual(resStart.status, 400, `start_date=${badDate} should be rejected`);
+    assert.match(resStart.json.error, /start_date/);
+
+    const badEnd = samplePayload('device-bad-dates');
+    badEnd.data[0].end_date = badDate;
+    const resEnd = await post(badEnd);
+    assert.strictEqual(resEnd.status, 400, `end_date=${badDate} should be rejected`);
+    assert.match(resEnd.json.error, /end_date/);
+  }
+
+  // Valid leap-day and non-UTC offset timestamps crossing UTC midnight remain accepted.
+  const validEdge = await post({
+    device_id: 'device-valid-edge-dates',
+    data: [
+      {
+        uuid: 'edge-leap-1',
+        type: 'HKQuantityTypeIdentifierHeartRate',
+        start_date: '2024-02-29T12:00:00Z',
+        end_date: '2024-02-29T12:05:00Z',
+        value: '62',
+        source: 'w',
+      },
+      {
+        uuid: 'edge-offset-1',
+        type: 'HKQuantityTypeIdentifierStepCount',
+        start_date: '2026-10-17T23:30:00-05:00',
+        end_date: '2026-10-17T23:35:00-05:00',
+        value: '120',
+        source: 'w',
+      },
+    ],
+    anchors: {},
+  });
+  assert.strictEqual(validEdge.status, 201);
+  assert.strictEqual(validEdge.json.inserted, 2);
+});
+
+test('stats endpoint stays 200 and does not crash when malformed date_bucket rows exist in SQLite', async () => {
+  await runSql(
+    srv.dbFile,
+    'INSERT OR IGNORE INTO devices (device_id, name) VALUES (?, ?)',
+    ['device-corrupt-db', 'Legacy Device'],
+  );
+  // Seed one valid row plus pre-existing corrupt rows whose date(...) evaluates to NULL in SQLite.
+  await runSql(
+    srv.dbFile,
+    'INSERT INTO daily_sync_stats (device_id, date_bucket, data_type, record_count) VALUES (?, ?, ?, ?)',
+    ['device-corrupt-db', '2026-10-17', 'HKQuantityTypeIdentifierHeartRate', 3],
+  );
+  await runSql(
+    srv.dbFile,
+    'INSERT INTO daily_sync_stats (device_id, date_bucket, data_type, record_count) VALUES (?, ?, ?, ?)',
+    ['device-corrupt-db', '2026-99-99', 'HKQuantityTypeIdentifierHeartRate', 5],
+  );
+  await runSql(
+    srv.dbFile,
+    'INSERT INTO daily_sync_stats (device_id, date_bucket, data_type, record_count) VALUES (?, ?, ?, ?)',
+    ['device-corrupt-db', 'not-a-date', 'HKQuantityTypeIdentifierStepCount', 2],
+  );
+
+  for (const timeScale of ['days', 'weeks', 'months']) {
+    const devRes = await srv.call(`/api/v1/health-sync/stats?timeScale=${timeScale}`, {
+      headers: { 'X-Device-ID': 'device-corrupt-db' },
+    });
+    assert.strictEqual(devRes.status, 200, `device scope timeScale=${timeScale} must return 200`);
+    assert.strictEqual(devRes.json.stats.length, 1);
+    assert.strictEqual(devRes.json.stats[0].type, 'Heart Rate');
+    assert.strictEqual(devRes.json.stats[0].count, 3);
+    assert.strictEqual(devRes.json.total_records, 3);
+
+    const allRes = await srv.call(`/api/v1/health-sync/stats?timeScale=${timeScale}&scope=all`);
+    assert.strictEqual(allRes.status, 200, `all scope timeScale=${timeScale} must return 200`);
+    for (const entry of allRes.json.stats) {
+      assert.strictEqual(typeof entry.date, 'string');
+      assert.ok(entry.date.length > 0);
+    }
+  }
+});

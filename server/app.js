@@ -209,7 +209,30 @@ function enqueueWrite(work) {
     return result.finally(() => { queueDepth -= 1; });
 }
 
-const ISO_DATE_PREFIX_RE = /^\d{4}-\d{2}-\d{2}T/;
+const ISO_TIMESTAMP_RE = /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?$/i;
+
+function isValidIsoTimestamp(value) {
+    if (typeof value !== 'string') return false;
+    const match = ISO_TIMESTAMP_RE.exec(value);
+    if (!match) return false;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    // Verify the calendar date directly: JS Date silently rolls over impossible
+    // dates (e.g. 2026-02-31 -> 2026-03-03), and checking UTC components of the
+    // full timestamp would false-fail valid offset timestamps near midnight.
+    const calendarDate = new Date(0);
+    calendarDate.setUTCFullYear(year, month - 1, day);
+    if (
+        calendarDate.getUTCFullYear() !== year ||
+        calendarDate.getUTCMonth() !== month - 1 ||
+        calendarDate.getUTCDate() !== day
+    ) {
+        return false;
+    }
+    const parsed = new Date(value);
+    return Number.isFinite(parsed.getTime());
+}
 
 fastify.post('/api/v1/health-sync/post', async (request, reply) => {
     const { device_id, data, anchors, deleted_uuids } = request.body || {};
@@ -220,8 +243,9 @@ fastify.post('/api/v1/health-sync/post', async (request, reply) => {
 
     // Validate all required fields in a single pass. Every record must carry a uuid
     // (SQLite treats NULLs as distinct in a UNIQUE index, so ON CONFLICT(uuid) silently
-    // fails to dedupe them), an ISO start_date (for 10-char YYYY-MM-DD bucketing), and
-    // non-null type/end_date/value (to avoid NOT NULL 500s or storing literal "undefined").
+    // fails to dedupe them), valid ISO start_date/end_date timestamps (rejecting
+    // impossible calendar dates like 2026-02-31 or 2026-99-99), and non-null
+    // type/value (to avoid NOT NULL 500s or storing literal "undefined").
     for (let i = 0; i < data.length; i += 1) {
         const m = data[i];
         if (!m || typeof m.uuid !== 'string' || m.uuid.length === 0) {
@@ -234,12 +258,12 @@ fastify.post('/api/v1/health-sync/post', async (request, reply) => {
                 error: `Metric at index ${i} has a missing or malformed type`
             });
         }
-        if (typeof m.start_date !== 'string' || !ISO_DATE_PREFIX_RE.test(m.start_date)) {
+        if (!isValidIsoTimestamp(m.start_date)) {
             return reply.status(400).send({
                 error: `Metric at index ${i} has a missing or malformed start_date`
             });
         }
-        if (typeof m.end_date !== 'string' || m.end_date.length === 0) {
+        if (!isValidIsoTimestamp(m.end_date)) {
             return reply.status(400).send({
                 error: `Metric at index ${i} has a missing or malformed end_date`
             });
@@ -466,14 +490,14 @@ fastify.get('/api/v1/health-sync/stats', async (request, reply) => {
         if (scope === 'all') {
             query = `SELECT date_bucket as date, data_type, SUM(record_count) as count
                      FROM daily_sync_stats
-                     WHERE record_count > 0
+                     WHERE record_count > 0 AND date_bucket IS NOT NULL AND date(date_bucket) IS NOT NULL
                      GROUP BY date_bucket, data_type`;
         } else {
             // (device_id, date_bucket, data_type) is already the primary key of daily_sync_stats,
             // so rows are already unique and ordered by date_bucket without a GROUP BY.
             query = `SELECT date_bucket as date, data_type, record_count as count
                      FROM daily_sync_stats
-                     WHERE device_id = ? AND record_count > 0`;
+                     WHERE device_id = ? AND record_count > 0 AND date_bucket IS NOT NULL AND date(date_bucket) IS NOT NULL`;
         }
     } else if (timeScale === 'weeks') {
         // Snap back to the Monday starting each week. The previous
@@ -483,12 +507,12 @@ fastify.get('/api/v1/health-sync/stats', async (request, reply) => {
         const weekStart = `date(date_bucket, '-' || ((strftime('%w', date_bucket) + 6) % 7) || ' days')`;
         query = `SELECT ${weekStart} as date, data_type, SUM(record_count) as count
                  FROM daily_sync_stats
-                 WHERE ${whereClause}
+                 WHERE ${whereClause} AND ${weekStart} IS NOT NULL
                  GROUP BY ${weekStart}, data_type`;
     } else if (timeScale === 'months') {
         query = `SELECT date(date_bucket, 'start of month') as date, data_type, SUM(record_count) as count
                  FROM daily_sync_stats
-                 WHERE ${whereClause}
+                 WHERE ${whereClause} AND date(date_bucket, 'start of month') IS NOT NULL
                  GROUP BY date(date_bucket, 'start of month'), data_type`;
     } else {
         return reply.status(400).send({ error: 'Invalid timeScale' });
@@ -505,7 +529,7 @@ fastify.get('/api/v1/health-sync/stats', async (request, reply) => {
         for (const row of rows) {
             totalRecords += row.count || 0;
             const bucket = mapTypeToBucket(row.data_type);
-            if (bucket === 'Other' || !row.count) continue;
+            if (!row.date || typeof row.date !== 'string' || bucket === 'Other' || !row.count) continue;
 
             const key = `${row.date}_${bucket}`;
             if (!aggregated[key]) {
@@ -515,7 +539,7 @@ fastify.get('/api/v1/health-sync/stats', async (request, reply) => {
         }
 
         return {
-            stats: Object.values(aggregated).sort((a, b) => a.date.localeCompare(b.date)),
+            stats: Object.values(aggregated).sort((a, b) => String(a.date).localeCompare(String(b.date))),
             total_records: totalRecords,
         };
     } catch (err) {
